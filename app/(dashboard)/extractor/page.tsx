@@ -11,7 +11,7 @@ import {
 import * as XLSX from 'xlsx';
 
 import { InvoiceData, ProcessingStatus, LineItem } from '@/types/extractor';
-import { extractInvoiceData } from '@/lib/ai-service';
+import { extractInvoiceData, NeedsPurchaseError } from '@/lib/ai-service';
 import { useCredits } from '@/lib/credits-context';
 import { CreditsBanner } from '@/components/credits-banner';
 import { PaywallModal } from '@/components/paywall-modal';
@@ -22,7 +22,7 @@ const formatCurrency = (val: number) =>
 
 export default function ExtractorPage() {
     const { user } = useAuth();
-    const { useCredit, getToolCredits } = useCredits();
+    const { getToolCredits, setCredits } = useCredits();
     const [showPaywall, setShowPaywall] = useState(false);
     const [invoices, setInvoices] = useState<InvoiceData[]>([]);
     const [processingStatus, setProcessingStatus] = useState<ProcessingStatus>(ProcessingStatus.IDLE);
@@ -77,13 +77,16 @@ export default function ExtractorPage() {
                     reader.onerror = reject;
                 });
 
-                const data = await extractInvoiceData(base64, file.type, file.name);
-                setInvoices(prev => [data, ...prev]);
+                // El servidor descuenta 1 crédito por extracción exitosa
+                const { invoice, credits } = await extractInvoiceData(base64, file.type, file.name);
+                setInvoices(prev => [invoice, ...prev]);
+                if (credits) setCredits(credits);
                 successCount++;
-
-                // Deduct 1 extractor credit per successful extraction
-                await useCredit('extractor');
             } catch (error) {
+                if (error instanceof NeedsPurchaseError) {
+                    setShowPaywall(true);
+                    break;
+                }
                 console.error(`Error processing ${file.name}`, error);
                 failCount++;
             }

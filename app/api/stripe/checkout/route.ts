@@ -1,17 +1,19 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { stripe } from '@/lib/stripe';
+import { getUserFromRequest } from '@/lib/supabase/server-auth';
 import { CREDIT_PACKAGES, PackageType } from '@/types/credits';
 
 export async function POST(request: NextRequest) {
     try {
-        const body = await request.json();
-        const { packageType, userId, userEmail } = body as {
-            packageType: PackageType;
-            userId: string;
-            userEmail: string;
-        };
+        const user = await getUserFromRequest(request);
+        if (!user) {
+            return NextResponse.json({ error: 'No autenticado' }, { status: 401 });
+        }
 
-        if (!packageType || !userId) {
+        const body = await request.json();
+        const { packageType } = body as { packageType: PackageType };
+
+        if (!packageType) {
             return NextResponse.json(
                 { error: 'Faltan parámetros requeridos' },
                 { status: 400 }
@@ -26,7 +28,10 @@ export async function POST(request: NextRequest) {
             );
         }
 
-        const origin = request.headers.get('origin') || 'http://localhost:3000';
+        const origin =
+            process.env.NEXT_PUBLIC_APP_URL ||
+            request.headers.get('origin') ||
+            'http://localhost:3000';
 
         const session = await stripe.checkout.sessions.create({
             payment_method_types: ['card'],
@@ -46,19 +51,17 @@ export async function POST(request: NextRequest) {
             mode: 'payment',
             success_url: `${origin}/?payment=success&package=${packageType}`,
             cancel_url: `${origin}/?payment=cancelled`,
-            customer_email: userEmail,
+            customer_email: user.email,
             metadata: {
-                user_id: userId,
+                user_id: user.id,
                 package_type: packageType,
             },
         });
 
         return NextResponse.json({ url: session.url });
-    } catch (error: any) {
+    } catch (error: unknown) {
         console.error('Stripe checkout error:', error);
-        return NextResponse.json(
-            { error: error.message || 'Error al crear sesión de pago' },
-            { status: 500 }
-        );
+        const message = error instanceof Error ? error.message : 'Error al crear sesión de pago';
+        return NextResponse.json({ error: message }, { status: 500 });
     }
 }

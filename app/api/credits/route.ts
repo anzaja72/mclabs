@@ -1,49 +1,19 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { supabaseAdmin } from '@/lib/supabase/admin';
+import { getUserFromRequest } from '@/lib/supabase/server-auth';
+import { getOrCreateCredits } from '@/lib/credits-server';
 
 export async function GET(request: NextRequest) {
     try {
-        const userId = request.nextUrl.searchParams.get('userId');
-
-        if (!userId) {
-            return NextResponse.json(
-                { error: 'userId es requerido' },
-                { status: 400 }
-            );
+        const user = await getUserFromRequest(request);
+        if (!user) {
+            return NextResponse.json({ error: 'No autenticado' }, { status: 401 });
         }
 
-        const { data, error } = await supabaseAdmin
-            .from('user_credits')
-            .select('*')
-            .eq('user_id', userId)
-            .single();
-
-        if (error && error.code === 'PGRST116') {
-            // No row found — create one with 100 credits for testing
-            const { data: newRow, error: insertError } = await supabaseAdmin
-                .from('user_credits')
-                .insert({ 
-                    user_id: userId,
-                    bank_recs_credits: 100,
-                    conciliator_credits: 100,
-                    dashboards_credits: 100,
-                    extractor_credits: 100
-                })
-                .select()
-                .single();
-
-            if (insertError) throw insertError;
-            return NextResponse.json(newRow);
-        }
-
-        if (error) throw error;
-
-        return NextResponse.json(data);
-    } catch (error: any) {
+        const credits = await getOrCreateCredits(user.id);
+        return NextResponse.json(credits);
+    } catch (error: unknown) {
         console.error('Error fetching credits:', error);
-        return NextResponse.json(
-            { error: error.message || 'Error al obtener créditos' },
-            { status: 500 }
-        );
+        const message = error instanceof Error ? error.message : 'Error al obtener créditos';
+        return NextResponse.json({ error: message }, { status: 500 });
     }
 }

@@ -11,18 +11,24 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ error: 'No signature' }, { status: 400 });
     }
 
+    if (!process.env.STRIPE_WEBHOOK_SECRET) {
+        console.error('STRIPE_WEBHOOK_SECRET no está configurado');
+        return NextResponse.json({ error: 'Webhook no configurado' }, { status: 500 });
+    }
+
     let event;
 
     try {
         event = stripe.webhooks.constructEvent(
             body,
             sig,
-            process.env.STRIPE_WEBHOOK_SECRET || ''
+            process.env.STRIPE_WEBHOOK_SECRET
         );
-    } catch (err: any) {
-        console.error('Webhook signature verification failed:', err.message);
+    } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : 'invalid signature';
+        console.error('Webhook signature verification failed:', message);
         return NextResponse.json(
-            { error: `Webhook Error: ${err.message}` },
+            { error: `Webhook Error: ${message}` },
             { status: 400 }
         );
     }
@@ -44,6 +50,20 @@ export async function POST(request: NextRequest) {
         }
 
         try {
+            // Idempotencia: Stripe reintenta webhooks; registrar el evento
+            // y abortar si ya fue procesado (violación de clave única).
+            const { error: eventError } = await supabaseAdmin
+                .from('stripe_events')
+                .insert({ event_id: event.id, session_id: session.id, user_id: userId, package_type: packageType });
+
+            if (eventError) {
+                if (eventError.code === '23505') {
+                    console.log(`Evento ${event.id} ya procesado, ignorando.`);
+                    return NextResponse.json({ received: true, duplicate: true });
+                }
+                throw eventError;
+            }
+
             // Check if user already has a credits row
             const { data: existing } = await supabaseAdmin
                 .from('user_credits')
@@ -52,7 +72,6 @@ export async function POST(request: NextRequest) {
                 .single();
 
             if (existing) {
-                // Add credits to existing row
                 const { error } = await supabaseAdmin
                     .from('user_credits')
                     .update({
@@ -66,7 +85,6 @@ export async function POST(request: NextRequest) {
 
                 if (error) throw error;
             } else {
-                // Create new credits row
                 const { error } = await supabaseAdmin
                     .from('user_credits')
                     .insert({

@@ -1,133 +1,81 @@
-import OpenAI from 'openai';
-import { InvoiceData } from "@/types/extractor";
+import { InvoiceData } from '@/types/extractor';
+import { UserCredits } from '@/types/credits';
+import { supabase } from '@/lib/supabase/client';
 
-// Helper to check for JSON in markdown
-const cleanJSON = (text: string) => text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+/**
+ * Cliente de los endpoints de IA del servidor. Las claves de OpenRouter
+ * viven solo en el servidor; aquí únicamente se envía el archivo y el
+ * JWT de la sesión. El descuento de créditos ocurre en el servidor.
+ */
 
-// 1. Bank Conciliator -> Minimax
-export const getBankConciliatorAI = () => new OpenAI({
-    baseURL: 'https://openrouter.ai/api/v1',
-    apiKey: process.env.NEXT_PUBLIC_OPENROUTER_MINIMAX_KEY || '',
-    dangerouslyAllowBrowser: true
-});
+export class NeedsPurchaseError extends Error {
+    needsPurchase = true as const;
+    constructor() {
+        super('Sin créditos disponibles');
+        this.name = 'NeedsPurchaseError';
+    }
+}
 
-// 2. Fiscal Conciliator -> Kimi
-export const getFiscalConciliatorAI = () => new OpenAI({
-    baseURL: 'https://openrouter.ai/api/v1',
-    apiKey: process.env.NEXT_PUBLIC_OPENROUTER_KIMI_KEY || '',
-    dangerouslyAllowBrowser: true
-});
-
-// 3. Dashboard -> GLM5
-export const getDashboardAI = () => new OpenAI({
-    baseURL: 'https://openrouter.ai/api/v1',
-    apiKey: process.env.NEXT_PUBLIC_OPENROUTER_GLM5_KEY || '',
-    dangerouslyAllowBrowser: true
-});
-
-// 4. Invoice Extractor -> Qwen3
-export const getExtractorAI = () => new OpenAI({
-    baseURL: 'https://openrouter.ai/api/v1',
-    apiKey: process.env.NEXT_PUBLIC_OPENROUTER_QWEN3_KEY || '',
-    dangerouslyAllowBrowser: true
-});
-
-export const MODELS = {
-    BANK: 'google/gemma-3-27b-it:free', // Using Google Gemma 3 27B which supports images and is free on OpenRouter
-    FISCAL: 'moonshotai/kimi-k2',
-    DASHBOARD: 'z-ai/glm-4.5',
-    EXTRACTOR: 'qwen/qwen-max'
+const getAccessToken = async (): Promise<string> => {
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session) throw new Error('No autenticado. Inicia sesión nuevamente.');
+    return session.access_token;
 };
 
-const EXTRACTOR_SYSTEM_PROMPT = `
-Actúa como un sistema de OCR y extracción de datos experto. Analiza el texto de la factura y extrae los datos en formato JSON estricto.
-Estructura JSON requerida:
-{
-    "generalInfo": { "invoiceNumber": "", "issueDate": "YYYY-MM-DD", "dueDate": "", "paymentMethod": "" },
-    "customerInfo": { "name": "", "idNumber": "", "address": "", "email": "" },
-    "issuerInfo": { "companyName": "", "nit": "" },
-    "lineItems": [
-        { "description": "", "quantity": 0, "unitPrice": 0, "totalValue": 0 }
-    ],
-    "totals": { "grandTotal": 0 }
-}
-Reglas:
-1. Si un campo no está claro, usa null o"".
-2. Los números deben ser numéricos puros.
-3. Devuelve SOLO el JSON, sin texto adicional ni bloques de markdown.
-`;
+const postAI = async <T>(path: string, body: object): Promise<T & { credits?: UserCredits }> => {
+    const token = await getAccessToken();
+    const res = await fetch(path, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify(body),
+    });
+
+    const data = await res.json();
+
+    if (res.status === 403 && data.needsPurchase) throw new NeedsPurchaseError();
+    if (!res.ok) throw new Error(data.error || 'Error en el servidor de IA');
+
+    return data;
+};
+
+const fileToBase64 = (file: File): Promise<string> =>
+    new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.readAsDataURL(file);
+        reader.onload = () => resolve((reader.result as string).split(',')[1]);
+        reader.onerror = reject;
+    });
 
 export const extractInvoiceData = async (
     base64Data: string,
     mimeType: string,
     fileName: string
-): Promise<InvoiceData> => {
-    const ai = getExtractorAI();
-    const dataUrl = `data:${mimeType};base64,${base64Data}`;
-
-    try {
-        const completion = await ai.chat.completions.create({
-            model: MODELS.EXTRACTOR,
-            messages: [
-                {
-                    role: "user",
-                    content: [
-                        { type: "text", text: EXTRACTOR_SYSTEM_PROMPT },
-                        { type: "image_url", image_url: { url: dataUrl } }
-                    ]
-                }
-            ],
-            response_format: { type: "json_object" },
-            max_tokens: 4000
-        });
-
-        const text = completion.choices[0]?.message?.content;
-        if (!text) throw new Error("La IA no devolvió datos válidos.");
-
-        const parsed = JSON.parse(cleanJSON(text));
-
-        return {
-            ...parsed,
-            id: Math.random().toString(36).substring(2, 9),
-            fileName,
-            processedAt: new Date().toISOString()
-        };
-    } catch (error) {
-        console.error("OpenRouter API Error:", error);
-        throw error;
-    }
+): Promise<{ invoice: InvoiceData; credits?: UserCredits }> => {
+    const data = await postAI<{ invoice: InvoiceData }>('/api/ai/extract-invoice', {
+        base64: base64Data,
+        mimeType,
+        fileName,
+    });
+    return { invoice: data.invoice, credits: data.credits };
 };
 
-export const extractBankDataFromPDF = async (file: File): Promise<any[]> => {
-    const arrayBuffer = await file.arrayBuffer();
-    const base64Data = btoa(
-        new Uint8Array(arrayBuffer).reduce((data, byte) => data + String.fromCharCode(byte), '')
-    );
-    const dataUrl = `data:${file.type};base64,${base64Data}`;
+export interface BankTransaction {
+    date: string;
+    description: string;
+    amount: number;
+    reference?: string;
+}
 
-    const ai = getBankConciliatorAI();
-
-    const response = await ai.chat.completions.create({
-        model: MODELS.BANK,
-        messages: [{
-            role: 'user',
-            content: [
-                {
-                    type: "text",
-                    text: `Analiza este extracto bancario y extrae todas las transacciones. 
-                    Devuelve SOLO un JSON array con este formato exacto:
-                    [{"date": "YYYY-MM-DD", "description": "texto", "amount": numero, "reference": "ref opcional"}]
-                    - amount debe ser positivo para depósitos/créditos y negativo para débitos/retiros
-                    - Devuelve SOLO el JSON, sin texto adicional ni bloques de markdown.`
-                },
-                { type: "image_url", image_url: { url: dataUrl } }
-            ]
-        }],
-        max_tokens: 4000
+export const extractBankDataFromPDF = async (
+    file: File
+): Promise<{ transactions: BankTransaction[]; credits?: UserCredits }> => {
+    const base64 = await fileToBase64(file);
+    const data = await postAI<{ transactions: BankTransaction[] }>('/api/ai/extract-bank', {
+        base64,
+        mimeType: file.type || 'application/pdf',
     });
-
-    const text = response.choices[0]?.message?.content;
-    if (!text) throw new Error('No se pudo extraer datos del PDF bancario');
-
-    return JSON.parse(cleanJSON(text));
+    return { transactions: data.transactions, credits: data.credits };
 };

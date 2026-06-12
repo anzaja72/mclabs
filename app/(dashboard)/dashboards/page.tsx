@@ -18,7 +18,7 @@ export default function DashboardsPage() {
     const { useCredit, getToolCredits } = useCredits()
     const [showPaywall, setShowPaywall] = useState(false)
 
-    const processData = (data: any[]) => {
+    const processData = (data: any[]): boolean => {
         try {
             // Normalize keys to lowercase for easier matching
             const normalizedData = data.map(row => {
@@ -77,10 +77,12 @@ export default function DashboardsPage() {
 
             setChartData({ categoryData, monthlyData })
             setError(null)
+            return true
         } catch (err: any) {
             console.error(err)
             setError(err.message || 'Error al procesar datos')
             setChartData(null)
+            return false
         }
     }
 
@@ -101,11 +103,15 @@ export default function DashboardsPage() {
                 const sheetName = workbook.SheetNames[0]
                 const sheet = workbook.Sheets[sheetName]
                 const jsonData = XLSX.utils.sheet_to_json(sheet)
-                processData(jsonData)
+                const ok = processData(jsonData)
 
-                // Deduct credit after successful processing
-                if (!error) {
-                    await useCredit('dashboards')
+                // Deduct credit only after successful processing
+                if (ok) {
+                    const result = await useCredit('dashboards')
+                    if (!result.success && result.needsPurchase) {
+                        setChartData(null)
+                        setShowPaywall(true)
+                    }
                 }
             }
         }

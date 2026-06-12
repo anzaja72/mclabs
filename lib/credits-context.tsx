@@ -11,24 +11,30 @@ interface CreditsContextType {
     useCredit: (tool: ToolType) => Promise<{ success: boolean; needsPurchase?: boolean; error?: string }>;
     purchasePackage: (packageType: PackageType) => Promise<void>;
     getToolCredits: (tool: ToolType) => number;
+    setCredits: (credits: UserCredits) => void;
 }
 
 const CreditsContext = createContext<CreditsContextType | undefined>(undefined);
 
 export function CreditsProvider({ children }: { children: ReactNode }) {
-    const { user } = useAuth();
+    const { user, session } = useAuth();
     const [credits, setCredits] = useState<UserCredits | null>(null);
     const [loading, setLoading] = useState(true);
 
+    const authHeaders = useCallback((): Record<string, string> => ({
+        'Content-Type': 'application/json',
+        ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
+    }), [session]);
+
     const refreshCredits = useCallback(async () => {
-        if (!user) {
+        if (!user || !session) {
             setCredits(null);
             setLoading(false);
             return;
         }
 
         try {
-            const res = await fetch(`/api/credits?userId=${user.id}`);
+            const res = await fetch('/api/credits', { headers: authHeaders() });
             if (res.ok) {
                 const data = await res.json();
                 setCredits(data);
@@ -38,7 +44,7 @@ export function CreditsProvider({ children }: { children: ReactNode }) {
         } finally {
             setLoading(false);
         }
-    }, [user]);
+    }, [user, session, authHeaders]);
 
     useEffect(() => {
         refreshCredits();
@@ -50,8 +56,8 @@ export function CreditsProvider({ children }: { children: ReactNode }) {
         try {
             const res = await fetch('/api/credits/use', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ userId: user.id, tool }),
+                headers: authHeaders(),
+                body: JSON.stringify({ tool }),
             });
 
             const data = await res.json();
@@ -70,8 +76,9 @@ export function CreditsProvider({ children }: { children: ReactNode }) {
             }
 
             return { success: true };
-        } catch (err: any) {
-            return { success: false, error: err.message };
+        } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : 'Error al usar crédito';
+            return { success: false, error: message };
         }
     };
 
@@ -81,12 +88,8 @@ export function CreditsProvider({ children }: { children: ReactNode }) {
         try {
             const res = await fetch('/api/stripe/checkout', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    packageType,
-                    userId: user.id,
-                    userEmail: user.email,
-                }),
+                headers: authHeaders(),
+                body: JSON.stringify({ packageType }),
             });
 
             const data = await res.json();
@@ -111,7 +114,7 @@ export function CreditsProvider({ children }: { children: ReactNode }) {
     };
 
     return (
-        <CreditsContext.Provider value={{ credits, loading, refreshCredits, useCredit, purchasePackage, getToolCredits }}>
+        <CreditsContext.Provider value={{ credits, loading, refreshCredits, useCredit, purchasePackage, getToolCredits, setCredits }}>
             {children}
         </CreditsContext.Provider>
     );

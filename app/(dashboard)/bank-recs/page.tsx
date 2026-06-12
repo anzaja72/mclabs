@@ -21,7 +21,7 @@ import {
     X
 } from 'lucide-react'
 import * as XLSX from 'xlsx'
-import { extractBankDataFromPDF } from '@/lib/ai-service'
+import { extractBankDataFromPDF, NeedsPurchaseError } from '@/lib/ai-service'
 import { useCredits } from '@/lib/credits-context'
 import { CreditsBanner } from '@/components/credits-banner'
 import { PaywallModal } from '@/components/paywall-modal'
@@ -56,7 +56,7 @@ interface ReconciliationResult {
 
 export default function BankRecsPage() {
     const { user } = useAuth()
-    const { useCredit, getToolCredits } = useCredits()
+    const { getToolCredits, setCredits } = useCredits()
     const [showPaywall, setShowPaywall] = useState(false)
     const [bankFile, setBankFile] = useState<File | null>(null)
     const [ledgerFile, setLedgerFile] = useState<File | null>(null)
@@ -142,7 +142,7 @@ export default function BankRecsPage() {
         setResult(null)
 
         try {
-            // 0. Check credits
+            // 0. Check credits (validación rápida; el servidor valida y descuenta de forma definitiva)
             if (getToolCredits('bank_recs') <= 0) {
                 setShowPaywall(true)
                 setIsProcessing(false)
@@ -150,8 +150,9 @@ export default function BankRecsPage() {
                 return
             }
 
-            // 1. Extract bank data using OpenRouter AI
-            const bankTransactions = await extractBankDataFromPDF(bankFile)
+            // 1. Extract bank data (el servidor descuenta 1 crédito en esta llamada)
+            const { transactions: bankTransactions, credits } = await extractBankDataFromPDF(bankFile)
+            if (credits) setCredits(credits)
 
             // 2. Parse ledger Excel file
             const ledgerTransactions = await parseLedgerExcel(ledgerFile)
@@ -159,18 +160,66 @@ export default function BankRecsPage() {
             // 3. Perform reconciliation
             const reconciliationResult = performReconciliation(bankTransactions, ledgerTransactions)
 
-            // 4. Deduct credit on success
-            await useCredit('bank_recs')
-
             setResult(reconciliationResult)
             setStatus('success')
         } catch (error: any) {
+            if (error instanceof NeedsPurchaseError) {
+                setShowPaywall(true)
+                setStatus('idle')
+                return
+            }
             console.error('Reconciliation error:', error)
             setStatus('error')
             setErrorMessage(error.message || 'Error durante el proceso de conciliación')
         } finally {
             setIsProcessing(false)
         }
+    }
+
+    const handleExportReport = () => {
+        if (!result) return
+
+        const wb = XLSX.utils.book_new()
+
+        const resumen = XLSX.utils.json_to_sheet([{
+            'Tx Bancarias': result.summary.totalBankTransactions,
+            'Tx Contables': result.summary.totalLedgerTransactions,
+            'Coincidencias': result.summary.matchedCount,
+            'Sin cruzar (Banco)': result.summary.unmatchedBankCount,
+            'Sin cruzar (Contable)': result.summary.unmatchedLedgerCount,
+        }])
+        XLSX.utils.book_append_sheet(wb, resumen, 'Resumen')
+
+        const coincidencias = XLSX.utils.json_to_sheet(result.matched.map(m => ({
+            'Fecha Banco': m.bank.date,
+            'Descripción Banco': m.bank.description,
+            'Monto Banco': m.bank.amount,
+            'Referencia Banco': m.bank.reference || '',
+            'Fecha Contable': m.ledger.date,
+            'Descripción Contable': m.ledger.description,
+            'Débito': m.ledger.debit,
+            'Crédito': m.ledger.credit,
+        })))
+        XLSX.utils.book_append_sheet(wb, coincidencias, 'Coincidencias')
+
+        const sinCruzarBanco = XLSX.utils.json_to_sheet(result.unmatchedBank.map(tx => ({
+            'Fecha': tx.date,
+            'Descripción': tx.description,
+            'Monto': tx.amount,
+            'Referencia': tx.reference || '',
+        })))
+        XLSX.utils.book_append_sheet(wb, sinCruzarBanco, 'Sin cruzar (Banco)')
+
+        const sinCruzarContable = XLSX.utils.json_to_sheet(result.unmatchedLedger.map(tx => ({
+            'Fecha': tx.date,
+            'Descripción': tx.description,
+            'Débito': tx.debit,
+            'Crédito': tx.credit,
+            'Referencia': tx.reference || '',
+        })))
+        XLSX.utils.book_append_sheet(wb, sinCruzarContable, 'Sin cruzar (Contable)')
+
+        XLSX.writeFile(wb, `Conciliacion_Bancaria_${new Date().toISOString().split('T')[0]}.xlsx`)
     }
 
     const handleNewReconciliation = () => {
@@ -425,7 +474,7 @@ export default function BankRecsPage() {
                             </div>
                         </div>
 
-                        <Button variant="outline" className="flex items-center gap-2">
+                        <Button variant="outline" onClick={handleExportReport} className="flex items-center gap-2">
                             <Download className="w-4 h-4" />
                             Exportar Reporte
                         </Button>

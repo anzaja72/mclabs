@@ -1,8 +1,11 @@
 'use client'
 
+import { Suspense, useEffect, useState } from "react"
 import Link from "next/link"
 import Image from "next/image"
-import { ArrowRight, BarChart3, FileText, Landmark, RefreshCw, LogOut, User, FileSpreadsheet, Info, CheckCircle2 } from "lucide-react"
+import { useSearchParams, useRouter } from "next/navigation"
+import confetti from "canvas-confetti"
+import { ArrowRight, BarChart3, FileText, Landmark, RefreshCw, LogOut, User, FileSpreadsheet, Info, CheckCircle2, XCircle, X } from "lucide-react"
 import { useAuth } from "@/lib/auth-context"
 
 import { Button } from "@/components/ui/button"
@@ -10,9 +13,40 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { useCredits } from "@/lib/credits-context"
 import { ToolType } from "@/types/credits"
 
-export default function Home() {
+export default function HomePage() {
+  return (
+    <Suspense>
+      <Home />
+    </Suspense>
+  )
+}
+
+function Home() {
   const { user, signOut } = useAuth()
-  const { getToolCredits, loading: creditsLoading } = useCredits()
+  const { getToolCredits, loading: creditsLoading, refreshCredits } = useCredits()
+  const searchParams = useSearchParams()
+  const router = useRouter()
+  const [paymentNotice, setPaymentNotice] = useState<'success' | 'cancelled' | null>(null)
+
+  useEffect(() => {
+    const payment = searchParams.get('payment')
+    if (!payment) return
+
+    if (payment === 'success') {
+      setPaymentNotice('success')
+      confetti({ particleCount: 120, spread: 80, origin: { y: 0.6 } })
+      // Los créditos se acreditan vía webhook de Stripe; refrescar con reintentos
+      refreshCredits()
+      const retry = setTimeout(() => refreshCredits(), 4000)
+      router.replace('/', { scroll: false })
+      return () => clearTimeout(retry)
+    }
+
+    if (payment === 'cancelled') {
+      setPaymentNotice('cancelled')
+      router.replace('/', { scroll: false })
+    }
+  }, [searchParams, refreshCredits, router])
 
   const handleSignOut = async () => {
     await signOut()
@@ -165,6 +199,36 @@ export default function Home() {
       </header>
 
       <main className="flex-1">
+        {/* Payment Notice */}
+        {paymentNotice && (
+          <div className="container max-w-7xl mx-auto px-4 pt-6">
+            <div className={`flex items-start justify-between gap-3 rounded-xl border p-4 ${
+              paymentNotice === 'success'
+                ? 'bg-green-50 border-green-200 text-green-800'
+                : 'bg-amber-50 border-amber-200 text-amber-800'
+            }`}>
+              <div className="flex items-start gap-3">
+                {paymentNotice === 'success'
+                  ? <CheckCircle2 className="h-5 w-5 mt-0.5 flex-shrink-0" />
+                  : <XCircle className="h-5 w-5 mt-0.5 flex-shrink-0" />}
+                <div>
+                  <p className="font-semibold">
+                    {paymentNotice === 'success' ? '¡Pago exitoso!' : 'Pago cancelado'}
+                  </p>
+                  <p className="text-sm">
+                    {paymentNotice === 'success'
+                      ? 'Tus créditos se están acreditando. Pueden tardar unos segundos en reflejarse.'
+                      : 'No se realizó ningún cargo. Puedes intentarlo de nuevo cuando quieras.'}
+                  </p>
+                </div>
+              </div>
+              <button onClick={() => setPaymentNotice(null)} className="p-1 hover:opacity-70">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* Hero Section */}
         <section className="py-16 md:py-24">
           <div className="container max-w-7xl mx-auto px-4 text-center">
