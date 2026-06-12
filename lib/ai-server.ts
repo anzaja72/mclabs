@@ -16,10 +16,10 @@ export const getOpenRouter = () => {
 };
 
 export const MODELS = {
-    BANK_OCR: 'google/gemini-3.1-flash-lite', // OCR + extracción estructurada de extractos
-    EXTRACTOR: 'google/gemini-3.5-flash', // Extracción de facturas (visión + JSON estructurado)
-    RECONCILER: 'google/gemini-3.5-flash', // Cruce bancario/DIAN con instrucciones del usuario
-    ANALYST: 'google/gemini-3.5-flash', // Análisis de estados financieros (acepta PDF/imagen)
+    BANK_OCR: 'moonshotai/kimi-k2.6', // OCR + extracción estructurada de extractos
+    EXTRACTOR: 'moonshotai/kimi-k2.6', // Extracción de facturas (visión + JSON estructurado)
+    RECONCILER: 'moonshotai/kimi-k2.6', // Cruce bancario/DIAN con instrucciones del usuario
+    ANALYST: 'moonshotai/kimi-k2.6', // Análisis de estados financieros (acepta PDF/imagen)
 };
 
 export const cleanJSON = (text: string) =>
