@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getUserFromRequest } from '@/lib/supabase/server-auth';
 import { consumeCredit, refundCredit } from '@/lib/credits-server';
-import { getOpenRouter, MODELS, cleanJSON } from '@/lib/ai-server';
+import { getOpenRouter, MODELS, parseModelJSON } from '@/lib/ai-server';
 
 export const maxDuration = 60;
 
@@ -69,7 +69,7 @@ export async function POST(request: NextRequest) {
         const text = completion.choices[0]?.message?.content;
         if (!text) throw new Error('La IA no devolvió datos válidos.');
 
-        const parsed = JSON.parse(cleanJSON(text));
+        const parsed = parseModelJSON<Record<string, unknown>>(text);
 
         return NextResponse.json({
             invoice: {

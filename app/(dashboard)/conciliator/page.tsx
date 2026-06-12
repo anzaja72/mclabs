@@ -12,6 +12,7 @@ import * as XLSX from 'xlsx';
 
 import { FileState, DataState, ResultItem } from '@/types/conciliator';
 import { procesarDatosDIAN, procesarDatosContables, generarConciliacion, formatearMoneda } from '@/lib/conciliator-logic';
+import { reconcileDianWithAI } from '@/lib/ai-service';
 import { FileCard } from '@/components/conciliator/file-card';
 import { ModalDetalle } from '@/components/conciliator/modal-detalle';
 import { ModalEstadosFinancieros } from '@/components/conciliator/modal-estados';
@@ -32,6 +33,10 @@ export default function ConciliatorPage() {
     const [selectedItem, setSelectedItem] = useState<ResultItem | null>(null);
     const [showFinancialModal, setShowFinancialModal] = useState(false);
     const [searchTerm, setSearchTerm] = useState('');
+    const [instructions, setInstructions] = useState('');
+    const [aiSummary, setAiSummary] = useState('');
+    const [aiLoading, setAiLoading] = useState(false);
+    const [aiError, setAiError] = useState('');
 
     const handleFile = async (type: 'contable' | 'dian', e: React.ChangeEvent<HTMLInputElement>) => {
         if (e.target.files && e.target.files[0]) {
@@ -81,10 +86,44 @@ export default function ConciliatorPage() {
 
                 const res = generarConciliacion(data.dian, data.contable);
                 setResults(res);
+
+                // Si hay instrucciones personalizadas, ajustar el diagnóstico con IA
+                if (instructions.trim()) {
+                    await applyAIAdjustments(res, instructions.trim());
+                }
             }
         };
         runConciliation();
     }, [data.dian, data.contable]);
+
+    // Envía los resultados del cruce + instrucciones del usuario a la IA,
+    // que reclasifica estados y añade notas (p. ej. consolidar nómina desagregada)
+    const applyAIAdjustments = async (rows: ResultItem[], userInstructions: string) => {
+        setAiLoading(true);
+        setAiError('');
+        setAiSummary('');
+        try {
+            const payload = rows.map(r => ({
+                nit: r.nit, tipo: r.tipo, dianTotal: r.dianTotal, dianDocs: r.dianDocs,
+                contableTotal: r.contableTotal, diferencia: r.diferencia, estado: r.estado,
+            }));
+            const { adjustments, summary } = await reconcileDianWithAI(payload, userInstructions);
+
+            if (adjustments.length > 0) {
+                const adjMap = new Map(adjustments.map(a => [`${a.nit}::${a.tipo}`, a]));
+                setResults(prev => prev.map(r => {
+                    const adj = adjMap.get(`${r.nit}::${r.tipo}`);
+                    if (!adj) return r;
+                    return { ...r, estado: adj.estado || r.estado, notaIA: adj.nota || '' };
+                }));
+            }
+            setAiSummary(summary || (adjustments.length === 0 ? 'La IA no encontró ajustes necesarios según tus instrucciones.' : ''));
+        } catch (err: unknown) {
+            setAiError(err instanceof Error ? err.message : 'Error al aplicar las instrucciones con IA');
+        } finally {
+            setAiLoading(false);
+        }
+    };
 
     const filteredResults = useMemo(() => {
         return results.filter(r =>
@@ -102,7 +141,8 @@ export default function ConciliatorPage() {
             'Docs DIAN': r.dianDocs,
             'Valor Contable': r.contableTotal,
             'Diferencia': r.diferencia,
-            'Estado': r.estado
+            'Estado': r.estado,
+            'Nota IA': r.notaIA || ''
         })));
         const wb = XLSX.utils.book_new();
         XLSX.utils.book_append_sheet(wb, ws, "Conciliación");
@@ -115,6 +155,9 @@ export default function ConciliatorPage() {
         setResults([]);
         setSearchTerm('');
         setCreditUsed(false);
+        setInstructions('');
+        setAiSummary('');
+        setAiError('');
     };
 
     return (
@@ -286,6 +329,65 @@ export default function ConciliatorPage() {
                     </div>
                 </div>
 
+                {/* Custom Instructions */}
+                <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm mb-8">
+                    <div className="flex items-start gap-4 mb-4">
+                        <div className="w-12 h-12 rounded-xl bg-blue-50 flex items-center justify-center flex-shrink-0">
+                            <Sparkles className="w-6 h-6 text-[#009FE3]" />
+                        </div>
+                        <div className="flex-1">
+                            <h3 className="font-bold text-slate-900">Instrucciones personalizadas para la IA (opcional)</h3>
+                            <p className="text-sm text-slate-500">
+                                Advierte al modelo sobre particularidades de tu facturación para ajustar el diagnóstico del cruce.
+                            </p>
+                        </div>
+                        {results.length > 0 && instructions.trim() && (
+                            <Button
+                                onClick={() => applyAIAdjustments(results, instructions.trim())}
+                                disabled={aiLoading}
+                                className="bg-[#009FE3] hover:bg-[#0088c7] text-white rounded-xl"
+                            >
+                                {aiLoading ? (
+                                    <><RefreshCw className="w-4 h-4 mr-2 animate-spin" /> Aplicando...</>
+                                ) : (
+                                    <><Sparkles className="w-4 h-4 mr-2" /> Aplicar con IA</>
+                                )}
+                            </Button>
+                        )}
+                    </div>
+                    <textarea
+                        value={instructions}
+                        onChange={(e) => setInstructions(e.target.value)}
+                        maxLength={2000}
+                        rows={3}
+                        placeholder={'Ejemplos:\n• "El NIT 900123456 factura por anticipos: las diferencias de ese tercero no son críticas."\n• "Los pagos de nómina están desagregados en contabilidad pero consolidados en el reporte DIAN: tenlo en cuenta y reclasifica."\n• "Ignora diferencias menores a $5.000 por redondeo."'}
+                        className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all text-slate-900 text-sm resize-y"
+                    />
+                </div>
+
+                {/* AI summary / error */}
+                {aiLoading && (
+                    <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 mb-6 flex items-center gap-3 text-blue-700">
+                        <RefreshCw className="w-5 h-5 animate-spin flex-shrink-0" />
+                        La IA está ajustando el diagnóstico según tus instrucciones...
+                    </div>
+                )}
+                {aiSummary && !aiLoading && (
+                    <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 mb-6 flex items-start gap-3">
+                        <Sparkles className="w-5 h-5 text-[#009FE3] flex-shrink-0 mt-0.5" />
+                        <div>
+                            <p className="font-medium text-slate-900 text-sm mb-1">Ajustes aplicados por la IA</p>
+                            <p className="text-sm text-slate-600">{aiSummary}</p>
+                        </div>
+                    </div>
+                )}
+                {aiError && !aiLoading && (
+                    <div className="bg-red-50 border border-red-200 rounded-xl p-4 mb-6 flex items-start gap-3">
+                        <AlertTriangle className="w-5 h-5 text-red-500 flex-shrink-0 mt-0.5" />
+                        <p className="text-sm text-red-600">{aiError}</p>
+                    </div>
+                )}
+
                 {/* Auto-process message */}
                 {files.dian && files.contable && results.length === 0 && loading && (
                     <div className="flex justify-center mb-8">
@@ -367,6 +469,11 @@ export default function ConciliatorPage() {
                                                 {row.estado === 'ADVERTENCIA' && <span className="inline-flex items-center gap-1 text-yellow-600 font-bold text-xs bg-yellow-100 px-2 py-1 rounded-full"><AlertTriangle size={12} /> REVISAR</span>}
                                                 {row.estado === 'CRITICO' && <span className="inline-flex items-center gap-1 text-red-600 font-bold text-xs bg-red-100 px-2 py-1 rounded-full"><AlertTriangle size={12} /> CRÍTICO</span>}
                                                 {row.estado === 'SOLO_DIAN' && <span className="inline-flex items-center gap-1 text-orange-600 font-bold text-xs bg-orange-100 px-2 py-1 rounded-full"><AlertTriangle size={12} /> NO EN CONTAB.</span>}
+                                                {row.notaIA && (
+                                                    <p className="text-[11px] text-[#009FE3] mt-1 max-w-[220px] mx-auto flex items-start gap-1 text-left">
+                                                        <Sparkles size={11} className="flex-shrink-0 mt-0.5" /> {row.notaIA}
+                                                    </p>
+                                                )}
                                             </td>
                                             <td className="px-6 py-4 text-center">
                                                 <button

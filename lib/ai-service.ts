@@ -69,6 +69,14 @@ export interface BankTransaction {
     reference?: string;
 }
 
+export interface LedgerTransaction {
+    date: string;
+    description: string;
+    debit: number;
+    credit: number;
+    reference?: string;
+}
+
 export const extractBankDataFromPDF = async (
     file: File
 ): Promise<{ transactions: BankTransaction[]; credits?: UserCredits }> => {
@@ -78,4 +86,75 @@ export const extractBankDataFromPDF = async (
         mimeType: file.type || 'application/pdf',
     });
     return { transactions: data.transactions, credits: data.credits };
+};
+
+export interface AIReconcileResult {
+    matched: { bank: number[]; ledger: number[]; note?: string }[];
+    unmatchedBank: number[];
+    unmatchedLedger: number[];
+    notes: string;
+}
+
+export const reconcileBankWithAI = async (
+    bankTransactions: BankTransaction[],
+    ledgerTransactions: LedgerTransaction[],
+    instructions: string
+): Promise<AIReconcileResult> =>
+    postAI<AIReconcileResult>('/api/ai/reconcile-bank', {
+        bankTransactions,
+        ledgerTransactions,
+        instructions,
+    });
+
+export interface DianAdjustment {
+    nit: string;
+    tipo: string;
+    estado?: string;
+    nota?: string;
+}
+
+export const reconcileDianWithAI = async (
+    results: { nit: string; tipo: string; dianTotal: number; dianDocs: number; contableTotal: number; diferencia: number; estado: string }[],
+    instructions: string
+): Promise<{ adjustments: DianAdjustment[]; summary: string }> =>
+    postAI<{ adjustments: DianAdjustment[]; summary: string }>('/api/ai/reconcile-dian', {
+        results,
+        instructions,
+    });
+
+export interface FinancialKPI {
+    label: string;
+    value: string;
+    trend: 'up' | 'down' | 'neutral';
+    comment: string;
+}
+
+export interface FinancialInsight {
+    title: string;
+    explanation: string;
+    action: string;
+}
+
+export interface FinancialAnalysis {
+    title: string;
+    kpis: FinancialKPI[];
+    categoryData: { name: string; value: number }[];
+    barData: { name: string; amount: number }[];
+    insights: FinancialInsight[];
+    summary: string;
+}
+
+export const analyzeFinancials = async (
+    input: { rows?: Record<string, unknown>[]; file?: File; instructions?: string }
+): Promise<{ analysis: FinancialAnalysis; credits?: UserCredits }> => {
+    const payload: Record<string, unknown> = { instructions: input.instructions || '' };
+    if (input.rows?.length) {
+        payload.rows = input.rows;
+    } else if (input.file) {
+        payload.base64 = await fileToBase64(input.file);
+        payload.mimeType = input.file.type || 'application/pdf';
+        payload.fileName = input.file.name;
+    }
+    const data = await postAI<{ analysis: FinancialAnalysis }>('/api/ai/analyze-financials', payload);
+    return { analysis: data.analysis, credits: data.credits };
 };

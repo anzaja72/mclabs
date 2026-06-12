@@ -21,7 +21,7 @@ import {
     X
 } from 'lucide-react'
 import * as XLSX from 'xlsx'
-import { extractBankDataFromPDF, NeedsPurchaseError } from '@/lib/ai-service'
+import { extractBankDataFromPDF, reconcileBankWithAI, NeedsPurchaseError } from '@/lib/ai-service'
 import { useCredits } from '@/lib/credits-context'
 import { CreditsBanner } from '@/components/credits-banner'
 import { PaywallModal } from '@/components/paywall-modal'
@@ -41,10 +41,19 @@ interface LedgerTransaction {
     reference?: string
 }
 
+// Cada grupo de cruce puede ser 1:1, 1:N o N:1 (p. ej. nómina consolidada
+// en el banco contra registros desagregados en contabilidad)
+interface MatchGroup {
+    bank: BankTransaction[]
+    ledger: LedgerTransaction[]
+    note?: string
+}
+
 interface ReconciliationResult {
-    matched: Array<{ bank: BankTransaction; ledger: LedgerTransaction }>
+    matched: MatchGroup[]
     unmatchedBank: BankTransaction[]
     unmatchedLedger: LedgerTransaction[]
+    aiNotes?: string
     summary: {
         totalBankTransactions: number
         totalLedgerTransactions: number
@@ -60,6 +69,7 @@ export default function BankRecsPage() {
     const [showPaywall, setShowPaywall] = useState(false)
     const [bankFile, setBankFile] = useState<File | null>(null)
     const [ledgerFile, setLedgerFile] = useState<File | null>(null)
+    const [instructions, setInstructions] = useState('')
     const [isProcessing, setIsProcessing] = useState(false)
     const [status, setStatus] = useState<'idle' | 'processing' | 'success' | 'error'>('idle')
     const [errorMessage, setErrorMessage] = useState('')
@@ -96,7 +106,7 @@ export default function BankRecsPage() {
         bankTransactions: BankTransaction[],
         ledgerTransactions: LedgerTransaction[]
     ): ReconciliationResult => {
-        const matched: Array<{ bank: BankTransaction; ledger: LedgerTransaction }> = []
+        const matched: MatchGroup[] = []
         const unmatchedBank = [...bankTransactions]
         const unmatchedLedger = [...ledgerTransactions]
 
@@ -111,7 +121,7 @@ export default function BankRecsPage() {
 
                 // Match if amounts are within 0.01 tolerance
                 if (Math.abs(bankAmount - ledgerAmount) < 0.01) {
-                    matched.push({ bank: bankTx, ledger: ledgerTx })
+                    matched.push({ bank: [bankTx], ledger: [ledgerTx] })
                     unmatchedBank.splice(i, 1)
                     unmatchedLedger.splice(j, 1)
                     break
@@ -123,6 +133,38 @@ export default function BankRecsPage() {
             matched,
             unmatchedBank,
             unmatchedLedger,
+            summary: {
+                totalBankTransactions: bankTransactions.length,
+                totalLedgerTransactions: ledgerTransactions.length,
+                matchedCount: matched.length,
+                unmatchedBankCount: unmatchedBank.length,
+                unmatchedLedgerCount: unmatchedLedger.length
+            }
+        }
+    }
+
+    // Cruce con IA cuando el usuario da instrucciones personalizadas
+    // (consolidaciones 1:N, criterios propios, etc.)
+    const performAIReconciliation = async (
+        bankTransactions: BankTransaction[],
+        ledgerTransactions: LedgerTransaction[],
+        userInstructions: string
+    ): Promise<ReconciliationResult> => {
+        const ai = await reconcileBankWithAI(bankTransactions, ledgerTransactions, userInstructions)
+
+        const matched: MatchGroup[] = ai.matched.map(g => ({
+            bank: g.bank.map(i => bankTransactions[i]),
+            ledger: g.ledger.map(i => ledgerTransactions[i]),
+            note: g.note
+        }))
+        const unmatchedBank = ai.unmatchedBank.map(i => bankTransactions[i])
+        const unmatchedLedger = ai.unmatchedLedger.map(i => ledgerTransactions[i])
+
+        return {
+            matched,
+            unmatchedBank,
+            unmatchedLedger,
+            aiNotes: ai.notes,
             summary: {
                 totalBankTransactions: bankTransactions.length,
                 totalLedgerTransactions: ledgerTransactions.length,
@@ -157,8 +199,11 @@ export default function BankRecsPage() {
             // 2. Parse ledger Excel file
             const ledgerTransactions = await parseLedgerExcel(ledgerFile)
 
-            // 3. Perform reconciliation
-            const reconciliationResult = performReconciliation(bankTransactions, ledgerTransactions)
+            // 3. Perform reconciliation: con IA si hay instrucciones personalizadas,
+            //    de lo contrario cruce local exacto por montos
+            const reconciliationResult = instructions.trim()
+                ? await performAIReconciliation(bankTransactions, ledgerTransactions, instructions.trim())
+                : performReconciliation(bankTransactions, ledgerTransactions)
 
             setResult(reconciliationResult)
             setStatus('success')
@@ -190,15 +235,17 @@ export default function BankRecsPage() {
         }])
         XLSX.utils.book_append_sheet(wb, resumen, 'Resumen')
 
-        const coincidencias = XLSX.utils.json_to_sheet(result.matched.map(m => ({
-            'Fecha Banco': m.bank.date,
-            'Descripción Banco': m.bank.description,
-            'Monto Banco': m.bank.amount,
-            'Referencia Banco': m.bank.reference || '',
-            'Fecha Contable': m.ledger.date,
-            'Descripción Contable': m.ledger.description,
-            'Débito': m.ledger.debit,
-            'Crédito': m.ledger.credit,
+        const coincidencias = XLSX.utils.json_to_sheet(result.matched.map((m, idx) => ({
+            'Grupo': idx + 1,
+            'Fecha Banco': m.bank.map(t => t.date).join(' | '),
+            'Descripción Banco': m.bank.map(t => t.description).join(' | '),
+            'Monto Banco': m.bank.reduce((s, t) => s + t.amount, 0),
+            'Referencia Banco': m.bank.map(t => t.reference || '').filter(Boolean).join(' | '),
+            'Fecha Contable': m.ledger.map(t => t.date).join(' | '),
+            'Descripción Contable': m.ledger.map(t => t.description).join(' | '),
+            'Débito': m.ledger.reduce((s, t) => s + t.debit, 0),
+            'Crédito': m.ledger.reduce((s, t) => s + t.credit, 0),
+            'Nota IA': m.note || '',
         })))
         XLSX.utils.book_append_sheet(wb, coincidencias, 'Coincidencias')
 
@@ -225,6 +272,7 @@ export default function BankRecsPage() {
     const handleNewReconciliation = () => {
         setBankFile(null)
         setLedgerFile(null)
+        setInstructions('')
         setStatus('idle')
         setResult(null)
         setErrorMessage('')
@@ -409,6 +457,35 @@ export default function BankRecsPage() {
                     </div>
                 </div>
 
+                {/* Custom Instructions */}
+                <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm mb-8">
+                    <div className="flex items-start gap-4 mb-4">
+                        <div className="w-12 h-12 rounded-xl bg-blue-50 flex items-center justify-center flex-shrink-0">
+                            <Sparkles className="w-6 h-6 text-[#009FE3]" />
+                        </div>
+                        <div>
+                            <h3 className="font-bold text-slate-900">Instrucciones personalizadas para la IA (opcional)</h3>
+                            <p className="text-sm text-slate-500">
+                                Advierte al modelo sobre particularidades de tu contabilidad para que las tenga en cuenta al cruzar.
+                            </p>
+                        </div>
+                    </div>
+                    <textarea
+                        value={instructions}
+                        onChange={(e) => setInstructions(e.target.value)}
+                        maxLength={2000}
+                        rows={3}
+                        placeholder={'Ejemplos:\n• "El pago de nómina aparece consolidado en el extracto, pero en contabilidad está desagregado por empleado: consolida los registros de nómina al cruzar."\n• "Ignora diferencias menores a $1.000 por redondeo del banco."'}
+                        className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all text-slate-900 text-sm resize-y"
+                    />
+                    {instructions.trim() && (
+                        <p className="text-xs text-[#009FE3] mt-2 flex items-center gap-1">
+                            <Sparkles className="w-3 h-3" />
+                            El cruce se hará con IA aplicando tus instrucciones (puede tardar un poco más).
+                        </p>
+                    )}
+                </div>
+
                 {/* Action Button */}
                 <div className="flex flex-col items-center gap-4 mb-12">
                     <Button
@@ -451,6 +528,16 @@ export default function BankRecsPage() {
                     <div className="bg-white rounded-2xl border border-slate-200 p-6 mb-8">
                         <h3 className="text-xl font-bold text-slate-900 mb-6">Resultados de Conciliación</h3>
 
+                        {result.aiNotes && (
+                            <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 mb-6 flex items-start gap-3">
+                                <Sparkles className="w-5 h-5 text-[#009FE3] flex-shrink-0 mt-0.5" />
+                                <div>
+                                    <p className="font-medium text-slate-900 text-sm mb-1">Notas del cruce con IA</p>
+                                    <p className="text-sm text-slate-600">{result.aiNotes}</p>
+                                </div>
+                            </div>
+                        )}
+
                         <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
                             <div className="bg-slate-50 rounded-xl p-4 text-center">
                                 <p className="text-2xl font-bold text-slate-900">{result.summary.totalBankTransactions}</p>
@@ -473,6 +560,40 @@ export default function BankRecsPage() {
                                 <p className="text-xs text-orange-600">Sin cruzar (Contable)</p>
                             </div>
                         </div>
+
+                        {/* Detalle de grupos consolidados (1:N o N:1) */}
+                        {result.matched.some(g => g.bank.length > 1 || g.ledger.length > 1 || g.note) && (
+                            <div className="mb-6">
+                                <h4 className="font-semibold text-slate-900 text-sm mb-3">Cruces consolidados por la IA</h4>
+                                <div className="space-y-2">
+                                    {result.matched
+                                        .filter(g => g.bank.length > 1 || g.ledger.length > 1 || g.note)
+                                        .map((g, idx) => (
+                                            <div key={idx} className="border border-slate-200 rounded-xl p-4 text-sm">
+                                                <div className="grid md:grid-cols-2 gap-3">
+                                                    <div>
+                                                        <p className="text-xs font-semibold text-slate-400 uppercase mb-1">Banco ({g.bank.length})</p>
+                                                        {g.bank.map((t, i) => (
+                                                            <p key={i} className="text-slate-700">{t.date} — {t.description} — <span className="font-mono">{t.amount.toLocaleString('es-CO')}</span></p>
+                                                        ))}
+                                                    </div>
+                                                    <div>
+                                                        <p className="text-xs font-semibold text-slate-400 uppercase mb-1">Contable ({g.ledger.length})</p>
+                                                        {g.ledger.map((t, i) => (
+                                                            <p key={i} className="text-slate-700">{t.date} — {t.description} — <span className="font-mono">D:{t.debit.toLocaleString('es-CO')} C:{t.credit.toLocaleString('es-CO')}</span></p>
+                                                        ))}
+                                                    </div>
+                                                </div>
+                                                {g.note && (
+                                                    <p className="text-xs text-[#009FE3] mt-2 flex items-center gap-1">
+                                                        <Sparkles className="w-3 h-3 flex-shrink-0" /> {g.note}
+                                                    </p>
+                                                )}
+                                            </div>
+                                        ))}
+                                </div>
+                            </div>
+                        )}
 
                         <Button variant="outline" onClick={handleExportReport} className="flex items-center gap-2">
                             <Download className="w-4 h-4" />

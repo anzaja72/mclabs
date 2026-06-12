@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getUserFromRequest } from '@/lib/supabase/server-auth';
 import { consumeCredit, refundCredit } from '@/lib/credits-server';
-import { getOpenRouter, MODELS, cleanJSON } from '@/lib/ai-server';
+import { getOpenRouter, MODELS, parseModelJSON } from '@/lib/ai-server';
 
 export const maxDuration = 90;
 
@@ -59,7 +59,7 @@ Devuelve SOLO un JSON array con este formato exacto:
 
         let transactions: unknown;
         try {
-            transactions = JSON.parse(cleanJSON(text));
+            transactions = parseModelJSON(text);
         } catch {
             throw new Error('La IA no devolvió un JSON válido. Intenta con un archivo más legible.');
         }
