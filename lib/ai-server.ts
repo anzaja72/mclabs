@@ -16,10 +16,10 @@ export const getOpenRouter = () => {
 };
 
 export const MODELS = {
-    BANK_OCR: 'moonshotai/kimi-k2.6', // OCR + extracción estructurada de extractos
-    EXTRACTOR: 'moonshotai/kimi-k2.6', // Extracción de facturas (visión + JSON estructurado)
-    RECONCILER: 'moonshotai/kimi-k2.6', // Cruce bancario/DIAN con instrucciones del usuario
-    ANALYST: 'moonshotai/kimi-k2.6', // Análisis de estados financieros (acepta PDF/imagen)
+    BANK_OCR: 'minimax/minimax-m3', // OCR + extracción estructurada de extractos
+    EXTRACTOR: 'minimax/minimax-m3', // Extracción de facturas (visión + JSON estructurado)
+    RECONCILER: 'minimax/minimax-m3', // Cruce bancario/DIAN con instrucciones del usuario
+    ANALYST: 'minimax/minimax-m3', // Análisis de estados financieros (acepta PDF/imagen)
 };
 
 export const cleanJSON = (text: string) =>
