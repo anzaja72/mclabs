@@ -7,6 +7,8 @@ export interface UserCredits {
     conciliator_credits: number;
     dashboards_credits: number;
     extractor_credits: number;
+    /** Saldo real de la billetera unificada (créditos MC) */
+    saldo?: number;
     updated_at: string;
 }
 
@@ -70,3 +72,44 @@ export const CREDIT_PACKAGES = {
 } as const;
 
 export type PackageType = keyof typeof CREDIT_PACKAGES;
+
+// ============ Billetera unificada (Wompi) ============
+// Paquetes MC Pack: a mayor paquete, menor precio por crédito.
+// Fuente de verdad para el webhook: tabla `paquetes` en Supabase.
+export type PackId = 'p100' | 'p200' | 'p500';
+
+export const PACKS: Record<PackId, {
+    label: string;
+    precio_cop: number;
+    creditos: number;
+    precioPorCredito: string;
+    wompiUrl: string;
+    descripcion: string;
+    destacado?: boolean;
+}> = {
+    p100: {
+        label: 'MC Pack 100',
+        precio_cop: 100000,
+        creditos: 100,
+        precioPorCredito: '$1.000',
+        wompiUrl: 'https://checkout.wompi.co/l/Z103wm',
+        descripcion: 'Para pruebas u operaciones esporádicas: un lote pequeño de facturas o una declaración puntual.',
+    },
+    p200: {
+        label: 'MC Pack 200',
+        precio_cop: 200000,
+        creditos: 250,
+        precioPorCredito: '$800',
+        wompiUrl: 'https://checkout.wompi.co/l/mOxem4',
+        descripcion: 'La operación mensual estándar: conciliaciones bancarias y DIAN mes a mes con volumen moderado de facturas.',
+        destacado: true,
+    },
+    p500: {
+        label: 'MC Pack 500',
+        precio_cop: 500000,
+        creditos: 715,
+        precioPorCredito: '$699',
+        wompiUrl: 'https://checkout.wompi.co/l/eLSGKl',
+        descripcion: 'Alta demanda: contadores y firmas que gestionan varios clientes, conciliaciones masivas y múltiples declaraciones.',
+    },
+};

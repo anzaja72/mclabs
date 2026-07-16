@@ -10,11 +10,12 @@ interface CreditsBannerProps {
 }
 
 export function CreditsBanner({ tool, toolLabel }: CreditsBannerProps) {
-    const { getToolCredits, loading, purchasePackage } = useCredits();
+    const { credits, getToolCredits, loading, purchasePackage } = useCredits();
 
     if (loading) return null;
 
-    const remaining = getToolCredits(tool);
+    const remaining = getToolCredits(tool); // usos disponibles con el saldo actual
+    const saldo = credits?.saldo ?? 0;
     const isLow = remaining <= 1;
     const isEmpty = remaining === 0;
 
@@ -31,13 +32,13 @@ export function CreditsBanner({ tool, toolLabel }: CreditsBannerProps) {
                 <span className="font-medium">
                     {isEmpty
                         ? `Sin créditos para ${toolLabel}`
-                        : `${remaining} crédito${remaining !== 1 ? 's' : ''} disponible${remaining !== 1 ? 's' : ''}`
+                        : `Saldo: ${saldo} créditos · alcanza para ${remaining} uso${remaining !== 1 ? 's' : ''} de ${toolLabel}`
                     }
                 </span>
             </div>
             {(isEmpty || isLow) && (
                 <button
-                    onClick={() => purchasePackage('FULL')}
+                    onClick={() => purchasePackage('p200')}
                     className={`flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-bold transition-all ${
                         isEmpty
                             ? 'bg-red-600 hover:bg-red-700 text-white'

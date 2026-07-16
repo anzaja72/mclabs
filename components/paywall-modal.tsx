@@ -1,21 +1,18 @@
 'use client'
 
-import { X, ShoppingCart, Zap, Crown, Sparkles } from 'lucide-react';
+import { X, ShoppingCart, Zap, Crown } from 'lucide-react';
 import { useCredits } from '@/lib/credits-context';
-import { PackageType, CREDIT_PACKAGES } from '@/types/credits';
-import { Button } from '@/components/ui/button';
+import { PackId, PACKS } from '@/types/credits';
 
 interface PaywallModalProps {
     toolName: string;
     onClose: () => void;
 }
 
+const fmtCOP = (n: number) => `$${n.toLocaleString('es-CO')}`;
+
 export function PaywallModal({ toolName, onClose }: PaywallModalProps) {
     const { purchasePackage } = useCredits();
-
-    const handlePurchase = async (packageType: PackageType) => {
-        await purchasePackage(packageType);
-    };
 
     return (
         <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
@@ -36,7 +33,8 @@ export function PaywallModal({ toolName, onClose }: PaywallModalProps) {
                             Necesitas créditos para {toolName}
                         </h2>
                         <p className="text-blue-100 text-sm">
-                            Adquiere un paquete de créditos para continuar usando las herramientas MC Labs.
+                            Un solo saldo de créditos MC sirve para todas las herramientas.
+                            Pago seguro con Wompi (PSE, Nequi, tarjetas).
                         </p>
                     </div>
                     <div className="absolute -right-8 -bottom-8 opacity-10">
@@ -44,54 +42,49 @@ export function PaywallModal({ toolName, onClose }: PaywallModalProps) {
                     </div>
                 </div>
 
-                {/* Packages */}
-                <div className="p-8 space-y-4">
-                    {/* Full Package */}
-                    <div
-                        className="border-2 border-blue-200 bg-blue-50/50 rounded-2xl p-6 cursor-pointer hover:border-blue-400 hover:shadow-lg transition-all group relative"
-                        onClick={() => handlePurchase('FULL')}
-                    >
-                        <div className="absolute -top-3 left-6">
-                            <span className="bg-gradient-to-r from-blue-600 to-indigo-600 text-white text-[10px] font-black uppercase px-3 py-1 rounded-full flex items-center gap-1">
-                                <Crown className="w-3 h-3" /> Recomendado
-                            </span>
-                        </div>
-                        <div className="flex justify-between items-center">
-                            <div>
-                                <h3 className="text-lg font-black text-slate-900 mb-1">Paquete Completo</h3>
-                                <p className="text-sm text-slate-600">
-                                    2 Bancarias + 2 DIAN + 2 Tableros + 30 Extracciones IA
-                                </p>
-                            </div>
-                            <div className="text-right">
-                                <p className="text-2xl font-black text-blue-600">$100.000</p>
-                                <p className="text-xs text-slate-500">COP</p>
-                            </div>
-                        </div>
-                    </div>
-
-                    {/* Individual Packages */}
-                    <p className="text-xs font-bold uppercase text-slate-400 tracking-wider pt-2">O elige un paquete individual</p>
-
-                    <div className="grid grid-cols-2 gap-3">
-                        {(['BANK_RECS', 'CONCILIATOR', 'DASHBOARDS', 'EXTRACTOR'] as PackageType[]).map((pkgType) => {
-                            const pkg = CREDIT_PACKAGES[pkgType];
-                            return (
-                                <div
-                                    key={pkgType}
-                                    className="border border-slate-200 rounded-xl p-4 cursor-pointer hover:border-blue-300 hover:shadow-md transition-all"
-                                    onClick={() => handlePurchase(pkgType)}
-                                >
-                                    <div className="flex items-center gap-2 mb-2">
-                                        <Sparkles className="w-4 h-4 text-blue-500" />
-                                        <h4 className="font-bold text-slate-900 text-sm">{pkg.label}</h4>
+                {/* Packs */}
+                <div className="p-8 space-y-3">
+                    {(Object.keys(PACKS) as PackId[]).map((packId) => {
+                        const pack = PACKS[packId];
+                        return (
+                            <div
+                                key={packId}
+                                className={`rounded-2xl p-5 cursor-pointer transition-all group relative ${
+                                    pack.destacado
+                                        ? 'border-2 border-blue-300 bg-blue-50/50 hover:border-blue-500 hover:shadow-lg'
+                                        : 'border border-slate-200 hover:border-blue-300 hover:shadow-md'
+                                }`}
+                                onClick={() => purchasePackage(packId)}
+                            >
+                                {pack.destacado && (
+                                    <div className="absolute -top-3 left-6">
+                                        <span className="bg-gradient-to-r from-blue-600 to-indigo-600 text-white text-[10px] font-black uppercase px-3 py-1 rounded-full flex items-center gap-1">
+                                            <Crown className="w-3 h-3" /> Recomendado
+                                        </span>
                                     </div>
-                                    <p className="text-xs text-slate-500 mb-3">{pkg.description}</p>
-                                    <p className="font-black text-blue-600">$50.000 <span className="text-xs font-medium text-slate-400">COP</span></p>
+                                )}
+                                <div className="flex justify-between items-center gap-4">
+                                    <div>
+                                        <h3 className="text-lg font-black text-slate-900">
+                                            {pack.label}
+                                            <span className="ml-2 text-sm font-bold text-blue-600">
+                                                {pack.creditos} créditos
+                                            </span>
+                                        </h3>
+                                        <p className="text-xs text-slate-500 mt-1">{pack.descripcion}</p>
+                                    </div>
+                                    <div className="text-right shrink-0">
+                                        <p className="text-2xl font-black text-blue-600">{fmtCOP(pack.precio_cop)}</p>
+                                        <p className="text-xs text-slate-500">{pack.precioPorCredito}/crédito</p>
+                                    </div>
                                 </div>
-                            );
-                        })}
-                    </div>
+                            </div>
+                        );
+                    })}
+                    <p className="text-[11px] text-slate-400 text-center pt-2">
+                        Los créditos vencen a los 12 meses. Al terminar el pago volverás
+                        automáticamente y tu saldo quedará acreditado.
+                    </p>
                 </div>
             </div>
         </div>

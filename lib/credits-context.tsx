@@ -2,14 +2,14 @@
 
 import { createContext, useContext, useState, useEffect, useCallback, ReactNode } from 'react';
 import { useAuth } from '@/lib/auth-context';
-import { UserCredits, ToolType, PackageType } from '@/types/credits';
+import { UserCredits, ToolType, PackId, PACKS } from '@/types/credits';
 
 interface CreditsContextType {
     credits: UserCredits | null;
     loading: boolean;
     refreshCredits: () => Promise<void>;
     useCredit: (tool: ToolType) => Promise<{ success: boolean; needsPurchase?: boolean; error?: string }>;
-    purchasePackage: (packageType: PackageType) => Promise<void>;
+    purchasePackage: (packId: PackId) => Promise<void>;
     getToolCredits: (tool: ToolType) => number;
     setCredits: (credits: UserCredits) => void;
 }
@@ -82,24 +82,11 @@ export function CreditsProvider({ children }: { children: ReactNode }) {
         }
     };
 
-    const purchasePackage = async (packageType: PackageType) => {
-        if (!user) return;
-
-        try {
-            const res = await fetch('/api/stripe/checkout', {
-                method: 'POST',
-                headers: authHeaders(),
-                body: JSON.stringify({ packageType }),
-            });
-
-            const data = await res.json();
-
-            if (data.url) {
-                window.location.href = data.url;
-            }
-        } catch (err) {
-            console.error('Error creating checkout session:', err);
-        }
+    const purchasePackage = async (packId: PackId) => {
+        // Pago por link de Wompi: al terminar, Wompi redirige a
+        // /compra/confirmacion?id=<tx> y allí se acreditan los créditos.
+        const pack = PACKS[packId];
+        if (pack) window.location.href = pack.wompiUrl;
     };
 
     const getToolCredits = (tool: ToolType): number => {
