@@ -157,7 +157,7 @@ MC Labs reemplaza `lib/credits-server.ts` (CAS sobre columnas) por llamadas a es
 | **0. Decisiones** | Validar tarifario, paquetes, expiración, bienvenida, BYOK (ver §6) | — |
 | **1. Ledger** | Crear `billetera_*` + RPCs + `tarifario` en el Supabase de MC Labs | Bajo (no toca nada existente) |
 | **2. Migrar Renta a Supabase único** | Esquema, usuarios, storage, RLS | Medio (contraseñas, archivos) |
-| **3. Backends → RPCs** | MC Labs y FastAPI consumen el ledger | Bajo (lógica ya centralizada) |
+| **3. Backends → RPCs** | ✅ MC Labs EN PRODUCCIÓN con la billetera (2026-07-16): consumo, paywall Wompi, confirmación y webhook verificados E2E; saldos viejos convertidos por usos; welcome viejo apagado. Falta el lado FastAPI (Fase 5) | Hecho (MC Labs) |
 | **4. Pagos** | Webhooks Stripe + Wompi → ledger; redención de códigos | Medio (probar idempotencia) |
 | **5. URL única** | Hub + SPA renta con base `/renta/` en Netlify + API renta en VPS Hostinger con CORS | Medio (configurar Docker + TLS en el VPS) |
 | **6. Cutover** | Migrar saldos, redirects 301, congelar venta de códigos 24–48 h durante la ventana | Alto (comunicar a usuarios) |
