@@ -63,21 +63,47 @@ export async function POST(request: NextRequest) {
             : { type: 'image_url', image_url: { url: dataUrl } };
 
         const isPdf = mimeType === 'application/pdf';
-        const completion = await ai.chat.completions.create({
-            model: MODELS.EXTRACTOR,
-            messages: [
-                // OpenRouter acepta el content part "file" para PDFs; el SDK de OpenAI no lo tipa
-                { role: 'user', content: [{ type: 'text', text: EXTRACTOR_SYSTEM_PROMPT }, fileOrImage] as never },
-            ],
-            response_format: { type: 'json_object' },
-            max_tokens: 4000,
-            ...(isPdf ? { plugins: [{ id: 'file-parser', pdf: { engine: 'mistral-ocr' } }] } : {}),
-        } as never);
 
-        const text = completion.choices[0]?.message?.content;
-        if (!text) throw new Error('La IA no devolvió datos válidos.');
+        // ¿La extracción trajo datos reales de factura? (total, número o NIT)
+        const hasInvoiceData = (p: Record<string, unknown> | null): boolean => {
+            if (!p) return false;
+            const g = p.generalInfo as Record<string, unknown> | undefined;
+            const i = p.issuerInfo as Record<string, unknown> | undefined;
+            const t = p.totals as Record<string, unknown> | undefined;
+            const items = p.lineItems as unknown[] | undefined;
+            return Boolean(
+                (t && Number(t.grandTotal) > 0) ||
+                (g && g.invoiceNumber) ||
+                (i && i.nit) ||
+                (Array.isArray(items) && items.length > 0)
+            );
+        };
 
-        const parsed = parseModelJSON<Record<string, unknown>>(text);
+        const runExtraction = async (engine: 'pdf-text' | 'mistral-ocr' | null) => {
+            const completion = await ai.chat.completions.create({
+                model: MODELS.EXTRACTOR,
+                messages: [
+                    { role: 'user', content: [{ type: 'text', text: EXTRACTOR_SYSTEM_PROMPT }, fileOrImage] as never },
+                ],
+                response_format: { type: 'json_object' },
+                max_tokens: 4000,
+                ...(engine ? { plugins: [{ id: 'file-parser', pdf: { engine } }] } : {}),
+            } as never);
+            const text = completion.choices[0]?.message?.content;
+            if (!text) return null;
+            try {
+                return parseModelJSON<Record<string, unknown>>(text);
+            } catch {
+                return null;
+            }
+        };
+
+        // Nivel 1: 'pdf-text' gratis (facturas digitales). Nivel 2: OCR si falló.
+        let parsed = await runExtraction(isPdf ? 'pdf-text' : null);
+        if (isPdf && !hasInvoiceData(parsed)) {
+            parsed = await runExtraction('mistral-ocr');
+        }
+        if (!parsed) throw new Error('La IA no devolvió datos válidos.');
 
         return NextResponse.json({
             invoice: {

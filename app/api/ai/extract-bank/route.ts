@@ -57,29 +57,39 @@ Devuelve SOLO un JSON array con este formato exacto:
         ];
 
         const isPdf = mimeType === 'application/pdf';
-        const response = await ai.chat.completions.create({
-            model: MODELS.BANK_OCR,
-            messages: [
-                // OpenRouter acepta el content part "file" para PDFs; el SDK de OpenAI no lo tipa
-                { role: 'user', content: content as never },
-            ],
-            max_tokens: 8000,
-            // Motor OCR de OpenRouter para PDFs (rápido, sirve con escaneados)
-            ...(isPdf ? { plugins: [{ id: 'file-parser', pdf: { engine: 'mistral-ocr' } }] } : {}),
-        } as never);
 
-        const text = response.choices[0]?.message?.content;
-        if (!text) throw new Error('No se pudo extraer datos del extracto bancario');
+        // Estrategia por niveles para ahorrar costo y tiempo:
+        // 1) PDF → primero 'pdf-text' (GRATIS: extrae texto embebido, sirve
+        //    con extractos digitales del banco/DIAN, que son la mayoría).
+        // 2) Si no salió nada (PDF escaneado) → 'mistral-ocr' (pago, OCR real).
+        // Imágenes → visión directa, sin plugin.
+        const runExtraction = async (engine: 'pdf-text' | 'mistral-ocr' | null) => {
+            const response = await ai.chat.completions.create({
+                model: MODELS.BANK_OCR,
+                messages: [
+                    { role: 'user', content: content as never },
+                ],
+                max_tokens: 8000,
+                ...(engine ? { plugins: [{ id: 'file-parser', pdf: { engine } }] } : {}),
+            } as never);
+            const text = response.choices[0]?.message?.content;
+            if (!text) return null;
+            try {
+                const parsed = parseModelJSON(text);
+                return Array.isArray(parsed) ? parsed : null;
+            } catch {
+                return null;
+            }
+        };
 
-        let transactions: unknown;
-        try {
-            transactions = parseModelJSON(text);
-        } catch {
-            throw new Error('La IA no devolvió un JSON válido. Intenta con un archivo más legible.');
+        let transactions = await runExtraction(isPdf ? 'pdf-text' : null);
+        // Fallback a OCR solo si el PDF digital no dio resultados (escaneado)
+        if (isPdf && (!transactions || transactions.length === 0)) {
+            transactions = await runExtraction('mistral-ocr');
         }
 
         if (!Array.isArray(transactions)) {
-            throw new Error('La IA no devolvió una lista de transacciones.');
+            throw new Error('La IA no devolvió una lista de transacciones. Intenta con un archivo más legible.');
         }
 
         return NextResponse.json({ transactions, credits: consumed.credits });
