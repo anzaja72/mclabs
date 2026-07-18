@@ -4,12 +4,21 @@ import { createContext, useContext, useEffect, useState, ReactNode } from 'react
 import { User, Session, AuthError } from '@supabase/supabase-js'
 import { supabase } from '@/lib/supabase/client'
 
+export interface SignUpProfile {
+    nombre: string
+    telefono: string
+    ciudad: string
+    empresa: string
+    cargo: string
+}
+
 interface AuthContextType {
     user: User | null
     session: Session | null
     loading: boolean
     signIn: (email: string, password: string) => Promise<{ error: AuthError | null }>
-    signUp: (email: string, password: string, phone?: string) => Promise<{ error: AuthError | null }>
+    signUp: (email: string, password: string, profile: SignUpProfile) => Promise<{ error: AuthError | null }>
+    resetPassword: (email: string) => Promise<{ error: AuthError | null }>
     signOut: () => Promise<void>
 }
 
@@ -51,15 +60,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return { error }
     }
 
-    const signUp = async (email: string, password: string, phone?: string) => {
+    const signUp = async (email: string, password: string, profile: SignUpProfile) => {
         const { error } = await supabase.auth.signUp({
             email,
             password,
             options: {
                 data: {
-                    phone: phone || '',
-                }
+                    nombre: profile.nombre || '',
+                    telefono: profile.telefono || '',
+                    phone: profile.telefono || '',
+                    ciudad: profile.ciudad || '',
+                    empresa: profile.empresa || '',
+                    cargo: profile.cargo || '',
+                },
+                emailRedirectTo: typeof window !== 'undefined' ? `${window.location.origin}/login` : undefined,
             }
+        })
+        return { error }
+    }
+
+    const resetPassword = async (email: string) => {
+        const { error } = await supabase.auth.resetPasswordForEmail(email, {
+            redirectTo: typeof window !== 'undefined' ? `${window.location.origin}/login` : undefined,
         })
         return { error }
     }
@@ -69,7 +91,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
 
     return (
-        <AuthContext.Provider value={{ user, session, loading, signIn, signUp, signOut }}>
+        <AuthContext.Provider value={{ user, session, loading, signIn, signUp, resetPassword, signOut }}>
             {children}
         </AuthContext.Provider>
     )
