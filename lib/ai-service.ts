@@ -33,6 +33,21 @@ const postAI = async <T>(path: string, body: object): Promise<T & { credits?: Us
         body: JSON.stringify(body),
     });
 
+    // Si el servidor devolvió HTML (timeout ~26s de Netlify o archivo muy
+    // grande), res.json() lanzaría "Unexpected token '<'". Detectarlo y dar
+    // un mensaje claro.
+    const contentType = res.headers.get('content-type') || '';
+    if (!contentType.includes('application/json')) {
+        const snippet = (await res.text().catch(() => '')).slice(0, 120);
+        if (res.status === 413) {
+            throw new Error('El archivo es demasiado grande. Usa un PDF más liviano (menos de ~4 MB).');
+        }
+        if (res.status === 502 || res.status === 504 || res.status === 408) {
+            throw new Error('El análisis tardó demasiado y el servidor lo cortó. Prueba con un extracto más corto o vuelve a intentar.');
+        }
+        throw new Error(`El servidor devolvió una respuesta inesperada (${res.status}). ${snippet}`);
+    }
+
     const data = await res.json();
 
     if (res.status === 403 && data.needsPurchase) throw new NeedsPurchaseError();

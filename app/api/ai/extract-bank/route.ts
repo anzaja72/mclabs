@@ -5,6 +5,11 @@ import { getOpenRouter, MODELS, parseModelJSON } from '@/lib/ai-server';
 
 export const maxDuration = 90;
 
+type ContentPart =
+    | { type: 'text'; text: string }
+    | { type: 'image_url'; image_url: { url: string } }
+    | { type: 'file'; file: { filename: string; file_data: string } };
+
 export async function POST(request: NextRequest) {
     const user = await getUserFromRequest(request);
     if (!user) {
@@ -33,26 +38,35 @@ export async function POST(request: NextRequest) {
 
     try {
         const ai = getOpenRouter();
-        const response = await ai.chat.completions.create({
-            model: MODELS.BANK_OCR,
-            messages: [
-                {
-                    role: 'user',
-                    content: [
-                        {
-                            type: 'text',
-                            text: `Analiza este extracto bancario y extrae todas las transacciones.
+
+        const dataUrl = `data:${mimeType};base64,${base64}`;
+        const fileOrImage: ContentPart = mimeType === 'application/pdf'
+            ? { type: 'file', file: { filename: 'extracto.pdf', file_data: dataUrl } }
+            : { type: 'image_url', image_url: { url: dataUrl } };
+
+        const content: ContentPart[] = [
+            {
+                type: 'text',
+                text: `Analiza este extracto bancario y extrae todas las transacciones.
 Devuelve SOLO un JSON array con este formato exacto:
 [{"date": "YYYY-MM-DD", "description": "texto", "amount": numero, "reference": "ref opcional"}]
 - amount debe ser positivo para depósitos/créditos y negativo para débitos/retiros
 - Devuelve SOLO el JSON, sin texto adicional ni bloques de markdown.`,
-                        },
-                        { type: 'image_url', image_url: { url: `data:${mimeType};base64,${base64}` } },
-                    ],
-                },
+            },
+            fileOrImage,
+        ];
+
+        const isPdf = mimeType === 'application/pdf';
+        const response = await ai.chat.completions.create({
+            model: MODELS.BANK_OCR,
+            messages: [
+                // OpenRouter acepta el content part "file" para PDFs; el SDK de OpenAI no lo tipa
+                { role: 'user', content: content as never },
             ],
             max_tokens: 8000,
-        });
+            // Motor OCR de OpenRouter para PDFs (rápido, sirve con escaneados)
+            ...(isPdf ? { plugins: [{ id: 'file-parser', pdf: { engine: 'mistral-ocr' } }] } : {}),
+        } as never);
 
         const text = response.choices[0]?.message?.content;
         if (!text) throw new Error('No se pudo extraer datos del extracto bancario');

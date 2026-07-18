@@ -5,6 +5,11 @@ import { getOpenRouter, MODELS, parseModelJSON } from '@/lib/ai-server';
 
 export const maxDuration = 60;
 
+type ContentPart =
+    | { type: 'text'; text: string }
+    | { type: 'image_url'; image_url: { url: string } }
+    | { type: 'file'; file: { filename: string; file_data: string } };
+
 const EXTRACTOR_SYSTEM_PROMPT = `
 Actúa como un sistema de OCR y extracción de datos experto. Analiza el texto de la factura y extrae los datos en formato JSON estricto.
 Estructura JSON requerida:
@@ -51,20 +56,23 @@ export async function POST(request: NextRequest) {
 
     try {
         const ai = getOpenRouter();
+
+        const dataUrl = `data:${mimeType};base64,${base64}`;
+        const fileOrImage: ContentPart = mimeType === 'application/pdf'
+            ? { type: 'file', file: { filename: 'factura.pdf', file_data: dataUrl } }
+            : { type: 'image_url', image_url: { url: dataUrl } };
+
+        const isPdf = mimeType === 'application/pdf';
         const completion = await ai.chat.completions.create({
             model: MODELS.EXTRACTOR,
             messages: [
-                {
-                    role: 'user',
-                    content: [
-                        { type: 'text', text: EXTRACTOR_SYSTEM_PROMPT },
-                        { type: 'image_url', image_url: { url: `data:${mimeType};base64,${base64}` } },
-                    ],
-                },
+                // OpenRouter acepta el content part "file" para PDFs; el SDK de OpenAI no lo tipa
+                { role: 'user', content: [{ type: 'text', text: EXTRACTOR_SYSTEM_PROMPT }, fileOrImage] as never },
             ],
             response_format: { type: 'json_object' },
             max_tokens: 4000,
-        });
+            ...(isPdf ? { plugins: [{ id: 'file-parser', pdf: { engine: 'mistral-ocr' } }] } : {}),
+        } as never);
 
         const text = completion.choices[0]?.message?.content;
         if (!text) throw new Error('La IA no devolvió datos válidos.');
