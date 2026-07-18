@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getUserFromRequest } from '@/lib/supabase/server-auth';
 import { getOpenRouter, MODELS, parseModelJSON } from '@/lib/ai-server';
+import { shield, unshield } from '@/lib/privacy';
 
 export const maxDuration = 120;
 
@@ -62,21 +63,27 @@ export async function POST(request: NextRequest) {
 
     try {
         const ai = getOpenRouter();
+
+        // Privacy Shield: anonimiza PII en las descripciones (nombres de
+        // terceros, cédulas, etc.) antes de la IA. El cruce es por índice
+        // numérico y modo contable no toca montos, así que nada se rompe.
+        const userContent = `INSTRUCCIONES PERSONALIZADAS DEL USUARIO:\n${(instructions || 'Ninguna').slice(0, 2000)}\n\nBANCO (índice| fecha | descripción | monto | referencia):\n${bankList}\n\nCONTABLE (índice| fecha | descripción | débito/crédito | referencia):\n${ledgerList}`;
+        const shielded = shield(userContent);
+
         const completion = await ai.chat.completions.create({
             model: MODELS.RECONCILER,
             messages: [
                 { role: 'system', content: SYSTEM_PROMPT },
-                {
-                    role: 'user',
-                    content: `INSTRUCCIONES PERSONALIZADAS DEL USUARIO:\n${(instructions || 'Ninguna').slice(0, 2000)}\n\nBANCO (índice| fecha | descripción | monto | referencia):\n${bankList}\n\nCONTABLE (índice| fecha | descripción | débito/crédito | referencia):\n${ledgerList}`,
-                },
+                { role: 'user', content: shielded.text },
             ],
             response_format: { type: 'json_object' },
             max_tokens: 16000,
         });
 
-        const text = completion.choices[0]?.message?.content;
-        if (!text) throw new Error('La IA no devolvió resultados.');
+        const raw = completion.choices[0]?.message?.content;
+        if (!raw) throw new Error('La IA no devolvió resultados.');
+
+        const text = unshield(raw, shielded.vault);
 
         const parsed = parseModelJSON(text) as {
             matched?: { bank: number[]; ledger: number[]; note?: string }[];

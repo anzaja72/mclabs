@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getUserFromRequest } from '@/lib/supabase/server-auth';
 import { getOpenRouter, MODELS, parseModelJSON } from '@/lib/ai-server';
+import { shield, unshield } from '@/lib/privacy';
 
 export const maxDuration = 120;
 
@@ -64,21 +65,28 @@ export async function POST(request: NextRequest) {
 
     try {
         const ai = getOpenRouter();
+
+        // Privacy Shield: anonimiza PII (nombres, cédulas, emails, celulares)
+        // antes de enviar a la IA. Modo contable: NO toca montos ni NITs
+        // sueltos (la llave de cruce), así el emparejamiento se conserva.
+        const userContent = `INSTRUCCIONES PERSONALIZADAS DEL USUARIO:\n${instructions.slice(0, 2000)}\n\nRESULTADOS DEL CRUCE (NIT | tipo | valor DIAN | valor contable | diferencia | estado):\n${rowsList}`;
+        const shielded = shield(userContent);
+
         const completion = await ai.chat.completions.create({
             model: MODELS.RECONCILER,
             messages: [
                 { role: 'system', content: SYSTEM_PROMPT },
-                {
-                    role: 'user',
-                    content: `INSTRUCCIONES PERSONALIZADAS DEL USUARIO:\n${instructions.slice(0, 2000)}\n\nRESULTADOS DEL CRUCE (NIT | tipo | valor DIAN | valor contable | diferencia | estado):\n${rowsList}`,
-                },
+                { role: 'user', content: shielded.text },
             ],
             response_format: { type: 'json_object' },
             max_tokens: 8000,
         });
 
-        const text = completion.choices[0]?.message?.content;
-        if (!text) throw new Error('La IA no devolvió resultados.');
+        const raw = completion.choices[0]?.message?.content;
+        if (!raw) throw new Error('La IA no devolvió resultados.');
+
+        // Restaura los datos reales en la respuesta antes de procesarla.
+        const text = unshield(raw, shielded.vault);
 
         const parsed = parseModelJSON(text) as {
             adjustments?: { nit: string; tipo: string; estado?: string; nota?: string }[];

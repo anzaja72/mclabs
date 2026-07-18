@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getUserFromRequest } from '@/lib/supabase/server-auth';
 import { consumeCredit, refundCredit } from '@/lib/credits-server';
 import { getOpenRouter, MODELS, parseModelJSON } from '@/lib/ai-server';
+import { shield, unshield } from '@/lib/privacy';
 
 export const maxDuration = 120;
 
@@ -68,15 +69,18 @@ export async function POST(request: NextRequest) {
     }
 
     try {
+        // Privacy Shield sobre la parte de texto (datos tabulares e
+        // instrucciones): oculta nombres/cédulas/emails antes de la IA sin
+        // tocar montos. En la vía documento (PDF/imagen) no aplica al archivo.
+        const rawText = `INSTRUCCIONES DEL USUARIO:\n${(instructions || 'Ninguna').slice(0, 2000)}\n\n${
+            rows?.length
+                ? `DATOS DEL ESTADO FINANCIERO (JSON, ${Math.min(rows.length, 1000)} filas):\n${JSON.stringify(rows.slice(0, 1000))}`
+                : 'El estado financiero está en el documento adjunto.'
+        }`;
+        const shielded = shield(rawText);
+
         const content: ContentPart[] = [
-            {
-                type: 'text',
-                text: `INSTRUCCIONES DEL USUARIO:\n${(instructions || 'Ninguna').slice(0, 2000)}\n\n${
-                    rows?.length
-                        ? `DATOS DEL ESTADO FINANCIERO (JSON, ${Math.min(rows.length, 1000)} filas):\n${JSON.stringify(rows.slice(0, 1000))}`
-                        : 'El estado financiero está en el documento adjunto.'
-                }`,
-            },
+            { type: 'text', text: shielded.text },
         ];
 
         if (!rows?.length && base64 && mimeType) {
@@ -108,9 +112,10 @@ export async function POST(request: NextRequest) {
                     max_tokens: 8000,
                 });
 
-                const text = completion.choices[0]?.message?.content;
-                if (!text) throw new Error('La IA no devolvió el análisis.');
+                const raw = completion.choices[0]?.message?.content;
+                if (!raw) throw new Error('La IA no devolvió el análisis.');
 
+                const text = unshield(raw, shielded.vault);
                 const candidate = parseModelJSON<Record<string, unknown>>(text);
                 if (!Array.isArray(candidate.kpis) || !Array.isArray(candidate.insights)) {
                     throw new Error('La IA devolvió un análisis incompleto. Intenta de nuevo.');
