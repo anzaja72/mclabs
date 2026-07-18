@@ -5,7 +5,7 @@ import Link from "next/link"
 import Image from "next/image"
 import { useSearchParams, useRouter } from "next/navigation"
 import confetti from "canvas-confetti"
-import { ArrowRight, BarChart3, FileText, Landmark, RefreshCw, LogOut, User, FileSpreadsheet, Info, CheckCircle2, XCircle, X } from "lucide-react"
+import { ArrowRight, BarChart3, FileText, Landmark, RefreshCw, LogOut, User, FileSpreadsheet, Info, CheckCircle2, XCircle, X, Receipt } from "lucide-react"
 import { useAuth } from "@/lib/auth-context"
 
 import { Button } from "@/components/ui/button"
@@ -23,7 +23,7 @@ export default function HomePage() {
 
 function Home() {
   const { user, signOut } = useAuth()
-  const { getToolCredits, loading: creditsLoading, refreshCredits } = useCredits()
+  const { credits, getToolCredits, loading: creditsLoading, refreshCredits } = useCredits()
   const searchParams = useSearchParams()
   const router = useRouter()
   const [paymentNotice, setPaymentNotice] = useState<'success' | 'cancelled' | null>(null)
@@ -92,6 +92,17 @@ function Home() {
       iconBg: "bg-emerald-50",
       iconColor: "text-emerald-600",
       tool: 'extractor' as ToolType
+    },
+    {
+      title: "Declaración de Renta",
+      description: "Genera el borrador del Formulario 210 DIAN a partir de tus soportes con IA.",
+      href: "https://renta.mcconsultorias.com.co",
+      linkText: "Ir a Renta",
+      icon: Receipt,
+      iconBg: "bg-amber-50",
+      iconColor: "text-amber-600",
+      tool: 'extractor' as ToolType,
+      external: true
     }
   ]
 
@@ -244,15 +255,19 @@ function Home() {
         {/* Tools Cards */}
         <section className="pb-16">
           <div className="container max-w-7xl mx-auto px-4">
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4">
               {tools.map((tool) => {
                 const Icon = tool.icon
+                const isExternal = 'external' in tool && tool.external
+                const CardLink = isExternal
+                  ? (props: React.ComponentProps<'a'>) => <a target="_blank" rel="noopener noreferrer" {...props} />
+                  : (props: React.ComponentProps<typeof Link>) => <Link {...props} />
                 return (
                   <Card
                     key={tool.title}
                     className="bg-white border border-slate-200 hover:border-slate-300 hover:shadow-lg transition-all duration-200 cursor-pointer group"
                   >
-                    <Link href={tool.href} className="block p-6">
+                    <CardLink href={tool.href} className="block p-6">
                       <div className="flex items-center gap-3 mb-3">
                         <div className={`p-2 rounded-lg ${tool.iconBg}`}>
                           <Icon className={`h-5 w-5 ${tool.iconColor}`} />
@@ -266,16 +281,17 @@ function Home() {
                         {tool.linkText}
                         <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-1" />
                       </div>
-                      {!creditsLoading && (
-                        <div className={`mt-2 text-xs font-semibold px-2 py-1 rounded-full inline-flex items-center gap-1 ${
-                          getToolCredits(tool.tool) > 0
-                            ? 'bg-green-100 text-green-700'
-                            : 'bg-red-100 text-red-600'
-                        }`}>
-                          {getToolCredits(tool.tool)} crédito{getToolCredits(tool.tool) !== 1 ? 's' : ''}
-                        </div>
-                      )}
-                    </Link>
+                      {!creditsLoading && (() => {
+                        const saldo = isExternal ? (credits?.saldo ?? 0) : getToolCredits(tool.tool)
+                        return (
+                          <div className={`mt-2 text-xs font-semibold px-2 py-1 rounded-full inline-flex items-center gap-1 ${
+                            saldo > 0 ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-600'
+                          }`}>
+                            {saldo} crédito{saldo !== 1 ? 's' : ''}
+                          </div>
+                        )
+                      })()}
+                    </CardLink>
                   </Card>
                 )
               })}
