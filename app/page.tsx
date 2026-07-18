@@ -1,17 +1,10 @@
 'use client'
 
-import { Suspense, useEffect, useState } from "react"
-import Link from "next/link"
-import Image from "next/image"
+import { Suspense, useEffect, useMemo, useState } from "react"
 import { useSearchParams, useRouter } from "next/navigation"
 import confetti from "canvas-confetti"
-import { ArrowRight, BarChart3, FileText, Landmark, RefreshCw, LogOut, User, FileSpreadsheet, Info, CheckCircle2, XCircle, X, Receipt } from "lucide-react"
 import { useAuth } from "@/lib/auth-context"
-
-import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { useCredits } from "@/lib/credits-context"
-import { ToolType } from "@/types/credits"
 
 export default function HomePage() {
   return (
@@ -21,370 +14,165 @@ export default function HomePage() {
   )
 }
 
+// Iconos del diseño (paths de MC Labs Dashboard.dc.html)
+function Svg({ paths, size = 26 }: { paths: string[]; size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round">
+      {paths.map((d, i) => <path key={i} d={d} />)}
+    </svg>
+  )
+}
+
+const ICONS = {
+  bank: ['M3 9.5 12 4l9 5.5', 'M4.5 11v7', 'M8.5 11v7', 'M12 11v7', 'M15.5 11v7', 'M19.5 11v7', 'M3 20.5h18'],
+  sync: ['M20.5 9A8 8 0 0 0 6 5.5L3.5 8', 'M3.5 3.5v4.5H8', 'M3.5 15a8 8 0 0 0 14.5 3.5L20.5 16', 'M20.5 20.5V16H16'],
+  chart: ['M4 4v16h16', 'M8.5 20v-6', 'M13 20V8.5', 'M17.5 20v-9.5'],
+  doc: ['M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z', 'M14 3v5h5', 'M9 13h6', 'M9 17h4'],
+  receipt: ['M5.5 3v18l2-1.4L9.5 21l2-1.4 2 1.4 2-1.4 2 1.4V3l-2 1.4-2-1.4-2 1.4-2-1.4L7.5 4.4z', 'M8.5 8.5h7', 'M8.5 12.5h7'],
+  scale: ['M12 4v16', 'M7.5 20h9', 'M4 8h16', 'M8 6 4 14a4 4 0 0 0 8 0z', 'M16 6l4 8a4 4 0 0 1-8 0z', 'M9.5 5.5 12 4l2.5 1.5'],
+}
+
+const MODULES = [
+  { n: '01', title: 'Conciliación Bancaria', href: '/bank-recs', external: false, cta: 'Ir a Bancos', icon: ICONS.bank,
+    desc: 'Procese extractos bancarios y libros auxiliares con precisión algorítmica. El sistema concilia transacciones automáticamente y deja a su equipo solo las excepciones que requieren criterio.' },
+  { n: '02', title: 'Conciliación DIAN', href: '/conciliator', external: false, cta: 'Ir a DIAN', icon: ICONS.sync,
+    desc: 'Contraste su facturación electrónica DIAN contra los registros contables de forma sistemática, identificando inconsistencias antes de que representen un riesgo de auditoría.' },
+  { n: '03', title: 'Tableros Financieros', href: '/dashboards', external: false, cta: 'Ir a Tableros', icon: ICONS.chart,
+    desc: 'Transforme sus estados financieros en información ejecutiva: indicadores, tendencias e insights para respaldar la toma de decisiones ante gerencia y junta directiva.' },
+  { n: '04', title: 'Extractor IA', href: '/extractor', external: false, cta: 'Ir a Extractor', icon: ICONS.doc,
+    desc: 'Digitalice facturas en PDF o imagen mediante reconocimiento inteligente. El sistema extrae y estructura NIT, valores e impuestos, listos para su integración contable.' },
+  { n: '05', title: 'Declaración de Renta', href: 'https://renta.mcconsultorias.com.co', external: true, cta: 'Ir a Renta', icon: ICONS.receipt,
+    desc: 'Construya el borrador de la declaración de renta a partir de la información del contribuyente, con validación de cifras frente a soportes y alertas de inconsistencia.' },
+  { n: '06', title: 'Tributar-IA', href: 'https://renta.mcconsultorias.com.co', external: true, cta: 'Ir a Tributar-IA', icon: ICONS.scale,
+    desc: 'Evalúe la situación fiscal del contribuyente y obtenga alternativas de planeación tributaria fundamentadas en el Estatuto Tributario, con el sustento normativo.' },
+]
+
 function Home() {
-  const { user, signOut } = useAuth()
-  const { credits, getToolCredits, loading: creditsLoading, refreshCredits } = useCredits()
+  const { user, signOut, loading: authLoading } = useAuth()
+  const { credits, refreshCredits } = useCredits()
   const searchParams = useSearchParams()
   const router = useRouter()
   const [paymentNotice, setPaymentNotice] = useState<'success' | 'cancelled' | null>(null)
+  const [dark, setDark] = useState(false)
+
+  // Guard: si no hay sesión, al login
+  useEffect(() => {
+    if (!authLoading && !user) router.replace('/login')
+  }, [authLoading, user, router])
+
+  // Preferencia de tema
+  useEffect(() => {
+    const saved = typeof window !== 'undefined' ? localStorage.getItem('mc-theme') : null
+    if (saved) setDark(saved === 'dark')
+  }, [])
+  const toggleTheme = () => setDark(d => { const n = !d; localStorage.setItem('mc-theme', n ? 'dark' : 'light'); return n })
 
   useEffect(() => {
     const payment = searchParams.get('payment')
     if (!payment) return
-
     if (payment === 'success') {
       setPaymentNotice('success')
       confetti({ particleCount: 120, spread: 80, origin: { y: 0.6 } })
-      // Los créditos se acreditan vía webhook de Stripe; refrescar con reintentos
       refreshCredits()
       const retry = setTimeout(() => refreshCredits(), 4000)
       router.replace('/', { scroll: false })
       return () => clearTimeout(retry)
     }
-
     if (payment === 'cancelled') {
       setPaymentNotice('cancelled')
       router.replace('/', { scroll: false })
     }
   }, [searchParams, refreshCredits, router])
 
-  const handleSignOut = async () => {
-    await signOut()
-  }
+  const t = useMemo(() => dark
+    ? { bg: '#0a0c0f', surface: '#0f1317', card: '#151a1f', border: '#242b33', fg: '#f2f5f7', sub: '#a7afb9', muted: '#767e88', accent: '#2bb8ef', accentInk: '#5ccbf5', soft: '#0f2733' }
+    : { bg: '#ffffff', surface: '#f6f8f9', card: '#ffffff', border: '#e9ebee', fg: '#0b0d10', sub: '#565d66', muted: '#9298a1', accent: '#0f9fd6', accentInk: '#0a7dab', soft: '#e9f6fc' }
+  , [dark])
 
-  const tools = [
-    {
-      title: "Bancaria",
-      description: "Sube extractos bancarios y libros para conciliar automáticamente.",
-      href: "/bank-recs",
-      linkText: "Ir a Bancos",
-      icon: Landmark,
-      iconBg: "bg-blue-50",
-      iconColor: "text-blue-600",
-      tool: 'bank_recs' as ToolType
-    },
-    {
-      title: "DIAN",
-      description: "Cruza facturación electrónica contra contabilidad sin errores.",
-      href: "/conciliator",
-      linkText: "Ir a DIAN",
-      icon: RefreshCw,
-      iconBg: "bg-cyan-50",
-      iconColor: "text-cyan-600",
-      tool: 'conciliator' as ToolType
-    },
-    {
-      title: "Tableros",
-      description: "Visualiza informes financieros dinámicos e insights detallados.",
-      href: "/dashboards",
-      linkText: "Ir a Tableros",
-      icon: BarChart3,
-      iconBg: "bg-indigo-50",
-      iconColor: "text-indigo-600",
-      tool: 'dashboards' as ToolType
-    },
-    {
-      title: "Extractor IA",
-      description: "Digitaliza facturas PDF e imágenes con extracción automática.",
-      href: "/extractor",
-      linkText: "Ir a Extractor",
-      icon: FileText,
-      iconBg: "bg-emerald-50",
-      iconColor: "text-emerald-600",
-      tool: 'extractor' as ToolType
-    },
-    {
-      title: "Declaración de Renta",
-      description: "Genera el borrador del Formulario 210 DIAN a partir de tus soportes con IA.",
-      href: "https://renta.mcconsultorias.com.co",
-      linkText: "Ir a Renta",
-      icon: Receipt,
-      iconBg: "bg-amber-50",
-      iconColor: "text-amber-600",
-      tool: 'extractor' as ToolType,
-      external: true
-    }
-  ]
-
-  const usageGuides = [
-    {
-      title: "Conciliación Bancaria",
-      icon: Landmark,
-      iconBg: "bg-blue-100",
-      iconColor: "text-blue-600",
-      description: "Compara extractos bancarios con tu libro auxiliar contable.",
-      files: [
-        { name: "Extracto Bancario", format: "Excel (.xlsx, .xls) o CSV", columns: "Fecha, Descripción, Valor/Monto, Referencia" },
-        { name: "Libro Auxiliar", format: "Excel (.xlsx, .xls) o CSV", columns: "Fecha, Concepto, Débito, Crédito, Cuenta" }
-      ],
-      tips: [
-        "Asegúrate de que las fechas estén en formato consistente (DD/MM/YYYY o YYYY-MM-DD)",
-        "Los montos deben ser numéricos sin símbolos de moneda",
-        "Incluye referencias o números de documento para mejor cruce"
-      ]
-    },
-    {
-      title: "Conciliación DIAN",
-      icon: RefreshCw,
-      iconBg: "bg-cyan-100",
-      iconColor: "text-cyan-600",
-      description: "Cruza tu facturación electrónica DIAN contra tu contabilidad.",
-      files: [
-        { name: "Reporte DIAN", format: "Excel (.xlsx) descargado del portal DIAN", columns: "CUFE, Número Factura, NIT Emisor, Fecha, Base Gravable, IVA, Total" },
-        { name: "Libro Contable", format: "Excel (.xlsx, .xls) o CSV", columns: "Número Documento, NIT, Fecha, Base, IVA, Total, Cuenta Contable" }
-      ],
-      tips: [
-        "Descarga el reporte actualizado desde el portal DIAN",
-        "Verifica que los NITs estén sin puntos ni guiones",
-        "El CUFE debe estar completo para identificación única"
-      ]
-    },
-    {
-      title: "Tableros Financieros",
-      icon: BarChart3,
-      iconBg: "bg-indigo-100",
-      iconColor: "text-indigo-600",
-      description: "Visualiza datos financieros con gráficos interactivos.",
-      files: [
-        { name: "Datos Financieros", format: "Excel (.xlsx, .xls) o CSV", columns: "Date (Fecha), Category (Categoría), Amount (Monto)" }
-      ],
-      tips: [
-        "Usa nombres de columnas en inglés: Date, Category, Amount",
-        "Las fechas pueden ser en cualquier formato reconocible",
-        "Los montos negativos se mostrarán como egresos"
-      ]
-    },
-    {
-      title: "Extractor IA",
-      icon: FileText,
-      iconBg: "bg-emerald-100",
-      iconColor: "text-emerald-600",
-      description: "Extrae datos de facturas automáticamente con inteligencia artificial.",
-      files: [
-        { name: "Facturas", format: "PDF o Imágenes (JPG, PNG)", columns: "N/A - El sistema detecta automáticamente campos" }
-      ],
-      tips: [
-        "Sube archivos PDF legibles o imágenes claras",
-        "Funciona mejor con facturas electrónicas estándar",
-        "Puedes subir múltiples archivos a la vez"
-      ]
-    }
-  ]
+  const saldo = credits?.saldo ?? 0
 
   return (
-    <div className="flex min-h-screen flex-col bg-gradient-to-b from-slate-50 to-white">
-      {/* Header */}
-      <header className="sticky top-0 z-50 w-full border-b bg-white/95 backdrop-blur supports-[backdrop-filter]:bg-white/60">
-        <div className="container flex h-16 items-center justify-between max-w-7xl mx-auto px-4">
-          <div className="flex items-center">
-            <Link className="flex items-center space-x-2" href="/">
-              <Image
-                src="/mc-labs-logo.png"
-                alt="MC Labs"
-                width={28}
-                height={28}
-                className="object-contain"
-              />
-              <span className="font-semibold text-lg">MC Labs</span>
-            </Link>
-          </div>
+    <div style={{ minHeight: '100vh', background: t.bg, color: t.fg, fontFamily: "'Manrope', system-ui, sans-serif" }}>
+      <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet" />
 
-          {user && (
-            <div className="flex items-center gap-4">
-              <div className="flex items-center gap-2 text-sm text-slate-600">
-                <User className="h-4 w-4" />
-                <span className="hidden sm:inline">{user.email}</span>
-              </div>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={handleSignOut}
-                className="text-slate-500 hover:text-slate-900"
-              >
-                <LogOut className="h-4 w-4 mr-2" />
-                <span>Salir</span>
-              </Button>
-            </div>
-          )}
+      {paymentNotice && (
+        <div style={{ padding: '12px 20px', textAlign: 'center', fontSize: 14, fontWeight: 600,
+          background: paymentNotice === 'success' ? '#e9f6fc' : '#fef2f2',
+          color: paymentNotice === 'success' ? '#0a7dab' : '#b91c1c' }}>
+          {paymentNotice === 'success'
+            ? '¡Pago recibido! Tus créditos se están acreditando.'
+            : 'Pago cancelado. No se realizó ningún cargo.'}
+          <button onClick={() => setPaymentNotice(null)} style={{ marginLeft: 12, background: 'none', border: 'none', cursor: 'pointer', color: 'inherit', fontWeight: 700 }}>✕</button>
         </div>
-      </header>
+      )}
 
-      <main className="flex-1">
-        {/* Payment Notice */}
-        {paymentNotice && (
-          <div className="container max-w-7xl mx-auto px-4 pt-6">
-            <div className={`flex items-start justify-between gap-3 rounded-xl border p-4 ${
-              paymentNotice === 'success'
-                ? 'bg-green-50 border-green-200 text-green-800'
-                : 'bg-amber-50 border-amber-200 text-amber-800'
-            }`}>
-              <div className="flex items-start gap-3">
-                {paymentNotice === 'success'
-                  ? <CheckCircle2 className="h-5 w-5 mt-0.5 flex-shrink-0" />
-                  : <XCircle className="h-5 w-5 mt-0.5 flex-shrink-0" />}
-                <div>
-                  <p className="font-semibold">
-                    {paymentNotice === 'success' ? '¡Pago exitoso!' : 'Pago cancelado'}
-                  </p>
-                  <p className="text-sm">
-                    {paymentNotice === 'success'
-                      ? 'Tus créditos se están acreditando. Pueden tardar unos segundos en reflejarse.'
-                      : 'No se realizó ningún cargo. Puedes intentarlo de nuevo cuando quieras.'}
-                  </p>
-                </div>
-              </div>
-              <button onClick={() => setPaymentNotice(null)} className="p-1 hover:opacity-70">
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-          </div>
-        )}
+      {/* Header */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '20px 34px', borderBottom: `1px solid ${t.border}`, maxWidth: 1200, margin: '0 auto' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <span style={{ width: 34, height: 34, borderRadius: 10, background: t.accent, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: 17 }}>M</span>
+          <span style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: 18, letterSpacing: '-.01em' }}>MC Labs</span>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 18, fontSize: 14, color: t.muted }}>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '6px 12px', borderRadius: 999, background: t.soft, color: t.accentInk, fontWeight: 700 }}>
+            {saldo} crédito{saldo !== 1 ? 's' : ''}
+          </span>
+          <span style={{ display: 'none', alignItems: 'center', gap: 7 }} className="mc-email">{user?.email}</span>
+          <button onClick={toggleTheme} style={{ display: 'inline-flex', alignItems: 'center', gap: 7, border: `1px solid ${t.border}`, background: t.surface, color: t.sub, padding: '7px 12px', borderRadius: 9, cursor: 'pointer', fontFamily: 'inherit', fontSize: 13, fontWeight: 600 }}>
+            {dark ? '☀︎ Claro' : '☾ Oscuro'}
+          </button>
+          <button onClick={() => signOut()} style={{ display: 'inline-flex', alignItems: 'center', gap: 7, border: 'none', background: 'none', color: t.sub, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit', fontSize: 14 }}>
+            Salir
+          </button>
+        </div>
+      </div>
 
-        {/* Hero Section */}
-        <section className="py-16 md:py-24">
-          <div className="container max-w-7xl mx-auto px-4 text-center">
-            <h1 className="text-4xl md:text-5xl lg:text-6xl font-bold text-slate-900 mb-4">
-              Automatización contable MC
-            </h1>
-            <p className="text-lg text-slate-600 max-w-2xl mx-auto">
-              Optimiza tus flujos financieros con MC Labs. Concilia extractos bancarios y visualiza datos financieros en segundos.
-            </p>
-          </div>
-        </section>
+      <div style={{ maxWidth: 1200, margin: '0 auto', padding: '0 34px 80px' }}>
+        {/* Hero */}
+        <div style={{ padding: '64px 0 30px', textAlign: 'center', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 20 }}>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 13, fontWeight: 600, letterSpacing: '.12em', textTransform: 'uppercase', color: t.accentInk, background: t.soft, padding: '7px 14px', borderRadius: 999 }}>
+            <span style={{ width: 6, height: 6, borderRadius: '50%', background: t.accent }}></span>Inteligencia artificial contable
+          </span>
+          <h1 style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: 48, lineHeight: 1.05, letterSpacing: '-.025em', maxWidth: 820, margin: 0 }}>
+            Automatización Contable con Inteligencia Artificial
+          </h1>
+          <p style={{ maxWidth: 640, fontSize: 17, lineHeight: 1.6, color: t.sub, margin: 0 }}>
+            MC Labs integra IA especializada en el ejercicio contable y tributario colombiano para reducir tiempos de conciliación, minimizar errores de digitación y fortalecer el control sobre sus obligaciones fiscales.
+          </p>
+        </div>
 
-        {/* Tools Cards */}
-        <section className="pb-16">
-          <div className="container max-w-7xl mx-auto px-4">
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4">
-              {tools.map((tool) => {
-                const Icon = tool.icon
-                const isExternal = 'external' in tool && tool.external
-                const CardLink = isExternal
-                  ? (props: React.ComponentProps<'a'>) => <a target="_blank" rel="noopener noreferrer" {...props} />
-                  : (props: React.ComponentProps<typeof Link>) => <Link {...props} />
-                return (
-                  <Card
-                    key={tool.title}
-                    className="bg-white border border-slate-200 hover:border-slate-300 hover:shadow-lg transition-all duration-200 cursor-pointer group"
-                  >
-                    <CardLink href={tool.href} className="block p-6">
-                      <div className="flex items-center gap-3 mb-3">
-                        <div className={`p-2 rounded-lg ${tool.iconBg}`}>
-                          <Icon className={`h-5 w-5 ${tool.iconColor}`} />
-                        </div>
-                        <h3 className="font-semibold text-slate-900">{tool.title}</h3>
-                      </div>
-                      <p className="text-sm text-slate-600 mb-4 leading-relaxed">
-                        {tool.description}
-                      </p>
-                      <div className="flex items-center gap-1 text-sm font-medium text-blue-600 group-hover:text-blue-700">
-                        {tool.linkText}
-                        <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-1" />
-                      </div>
-                      {!creditsLoading && (() => {
-                        const saldo = isExternal ? (credits?.saldo ?? 0) : getToolCredits(tool.tool)
-                        return (
-                          <div className={`mt-2 text-xs font-semibold px-2 py-1 rounded-full inline-flex items-center gap-1 ${
-                            saldo > 0 ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-600'
-                          }`}>
-                            {saldo} crédito{saldo !== 1 ? 's' : ''}
-                          </div>
-                        )
-                      })()}
-                    </CardLink>
-                  </Card>
-                )
-              })}
-            </div>
-          </div>
-        </section>
+        {/* Módulos */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: 18, paddingTop: 20 }}>
+          {MODULES.map((m) => {
+            const inner = (
+              <>
+                <span style={{ position: 'absolute', top: 22, right: 24, fontFamily: "'Space Grotesk', sans-serif", fontSize: 13, fontWeight: 600, color: t.muted, letterSpacing: '.04em' }}>{m.n}</span>
+                <span style={{ width: 46, height: 46, borderRadius: 12, background: t.soft, color: t.accent, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}><Svg paths={m.icon} /></span>
+                <h3 style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 600, fontSize: 20, letterSpacing: '-.01em', margin: 0 }}>{m.title}</h3>
+                <p style={{ fontSize: 14.5, lineHeight: 1.58, color: t.sub, flex: 1, margin: 0 }}>{m.desc}</p>
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontWeight: 700, fontSize: 14.5, color: t.accentInk }}>
+                  {m.cta}<Svg paths={['M5 12h13', 'M13 6l6 6-6 6']} size={17} />
+                </span>
+              </>
+            )
+            const cardStyle: React.CSSProperties = {
+              display: 'flex', flexDirection: 'column', gap: 16, padding: '26px 24px 24px',
+              border: `1px solid ${t.border}`, borderRadius: 18, background: t.card, position: 'relative',
+              transition: 'transform .18s ease, border-color .18s ease, box-shadow .18s ease', color: t.fg,
+            }
+            return m.external ? (
+              <a key={m.n} href={m.href} target="_blank" rel="noopener noreferrer" style={cardStyle} className="mc-card">{inner}</a>
+            ) : (
+              <a key={m.n} href={m.href} style={cardStyle} className="mc-card">{inner}</a>
+            )
+          })}
+        </div>
+      </div>
 
-        {/* Usage Guide Section */}
-        <section className="py-16 bg-slate-50 border-t border-slate-200">
-          <div className="container max-w-7xl mx-auto px-4">
-            <div className="text-center mb-12">
-              <div className="inline-flex items-center gap-2 bg-blue-100 text-blue-700 px-4 py-2 rounded-full text-sm font-medium mb-4">
-                <Info className="h-4 w-4" />
-                Guía de Uso
-              </div>
-              <h2 className="text-3xl md:text-4xl font-bold text-slate-900 mb-4">
-                ¿Cómo usar las herramientas?
-              </h2>
-              <p className="text-slate-600 max-w-2xl mx-auto">
-                Cada herramienta requiere archivos específicos con formatos determinados. A continuación encontrarás los requisitos para cada funcionalidad.
-              </p>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              {usageGuides.map((guide) => {
-                const Icon = guide.icon
-                return (
-                  <Card key={guide.title} className="bg-white border border-slate-200 overflow-hidden">
-                    <CardHeader className="pb-4">
-                      <div className="flex items-center gap-3">
-                        <div className={`p-3 rounded-xl ${guide.iconBg}`}>
-                          <Icon className={`h-6 w-6 ${guide.iconColor}`} />
-                        </div>
-                        <div>
-                          <CardTitle className="text-lg">{guide.title}</CardTitle>
-                          <CardDescription className="text-sm">{guide.description}</CardDescription>
-                        </div>
-                      </div>
-                    </CardHeader>
-                    <CardContent className="space-y-4">
-                      {/* Files Required */}
-                      <div>
-                        <h4 className="text-sm font-semibold text-slate-900 mb-3 flex items-center gap-2">
-                          <FileSpreadsheet className="h-4 w-4 text-slate-500" />
-                          Archivos Requeridos
-                        </h4>
-                        <div className="space-y-3">
-                          {guide.files.map((file, idx) => (
-                            <div key={idx} className="bg-slate-50 rounded-lg p-3 border border-slate-100">
-                              <div className="font-medium text-sm text-slate-900 mb-1">{file.name}</div>
-                              <div className="text-xs text-slate-500 mb-1">
-                                <span className="font-medium">Formato:</span> {file.format}
-                              </div>
-                              <div className="text-xs text-slate-500">
-                                <span className="font-medium">Columnas:</span> {file.columns}
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-
-                      {/* Tips */}
-                      <div>
-                        <h4 className="text-sm font-semibold text-slate-900 mb-2 flex items-center gap-2">
-                          <CheckCircle2 className="h-4 w-4 text-green-600" />
-                          Consejos
-                        </h4>
-                        <ul className="space-y-1">
-                          {guide.tips.map((tip, idx) => (
-                            <li key={idx} className="text-xs text-slate-600 flex items-start gap-2">
-                              <span className="text-green-500 mt-0.5">•</span>
-                              {tip}
-                            </li>
-                          ))}
-                        </ul>
-                      </div>
-                    </CardContent>
-                  </Card>
-                )
-              })}
-            </div>
-          </div>
-        </section>
-
-        {/* Footer Note */}
-        <section className="py-8 border-t border-slate-200 bg-white">
-          <div className="container max-w-7xl mx-auto px-4 text-center">
-            <p className="text-sm text-slate-500">
-              ¿Necesitas ayuda adicional? Contáctanos en <span className="font-medium text-blue-600">soporte@mclabs.co</span>
-            </p>
-          </div>
-        </section>
-      </main>
+      <style>{`
+        .mc-card:hover { transform: translateY(-4px); border-color: ${t.accent} !important; box-shadow: 0 18px 40px -26px rgba(15,159,214,.7); }
+        @media (min-width: 720px) { .mc-email { display: inline-flex !important; } }
+      `}</style>
     </div>
   )
 }
