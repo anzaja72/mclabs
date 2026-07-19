@@ -269,12 +269,19 @@ ROA: ${e.ratios.roa}% | ROE: ${e.ratios.roe}% | Endeudamiento: ${e.ratios.endeud
         <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50/30 to-white">
             {/* Estilos de impresión: el PDF sale de #reporte-imprimible */}
             <style>{`
+                .print-only { display: none; }
                 @media print {
                     body * { visibility: hidden; }
                     #reporte-imprimible, #reporte-imprimible * { visibility: visible; }
-                    #reporte-imprimible { position: absolute; left: 0; top: 0; width: 100%; padding: 24px; display: block !important; }
-                    #reporte-imprimible > div { page-break-inside: avoid; margin-bottom: 24px; }
+                    #reporte-imprimible { position: absolute; left: 0; top: 0; width: 100%; padding: 24px; }
                     .no-print { display: none !important; }
+                    .print-only { display: block !important; }
+                    /* Estados uno debajo del otro en el papel */
+                    .print-stack { display: block !important; }
+                    .print-stack > div { page-break-inside: avoid; margin-bottom: 24px; }
+                    /* El análisis arranca en página nueva */
+                    .print-analisis { page-break-before: always; }
+                    .print-analisis .grid { display: block !important; }
                 }
             `}</style>
 
@@ -383,24 +390,39 @@ ROA: ${e.ratios.roa}% | ROE: ${e.ratios.roe}% | Endeudamiento: ${e.ratios.endeud
 
                 {/* ============ RESULTADOS ============ */}
                 {estados && bg && er && (
-                    <div className="space-y-8">
+                    <div id="reporte-imprimible" className="space-y-8">
+                        <div className="print-only">
+                            <h1 style={{ fontSize: 22, fontWeight: 800, margin: 0 }}>{empresa || 'Estados Financieros'}</h1>
+                            <p style={{ fontSize: 12, color: '#555', margin: '4px 0 0' }}>
+                                Estados financieros al {fechaCorte || new Date().toISOString().slice(0, 10)} — Cifras en pesos colombianos —
+                                Generado con MC Labs el {new Date().toLocaleDateString('es-CO')}
+                                {bg.validacion.cuadra ? ' — Ecuación patrimonial verificada (A = P + Pt)' : ` — ADVERTENCIA: descuadre de $${fmt(bg.validacion.diferencia)}`}
+                            </p>
+                            <hr style={{ margin: '12px 0 20px' }} />
+                        </div>
+
                         <div className="flex flex-wrap items-center justify-between gap-3 no-print">
                             <div className={`flex items-center gap-2 px-4 py-2 rounded-full text-sm font-semibold ${bg.validacion.cuadra ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
                                 {bg.validacion.cuadra
                                     ? (<><CheckCircle2 className="w-4 h-4" />Ecuación patrimonial cuadrada (A = P + Pt)</>)
                                     : (<><AlertCircle className="w-4 h-4" />Descuadre: ${fmt(bg.validacion.diferencia)} — revisa el análisis IA</>)}
                             </div>
-                            <div className="flex gap-2">
-                                <Button variant="outline" onClick={handleExportExcel} className="flex items-center gap-2">
-                                    <Download className="w-4 h-4" />Excel
-                                </Button>
-                                <Button variant="outline" onClick={handleExportPDF} className="flex items-center gap-2">
-                                    <Printer className="w-4 h-4" />PDF
-                                </Button>
+                            <div className="flex flex-col items-end gap-1">
+                                <div className="flex gap-2">
+                                    <Button variant="outline" onClick={handleExportExcel} className="flex items-center gap-2">
+                                        <Download className="w-4 h-4" />Excel
+                                    </Button>
+                                    <Button variant="outline" onClick={handleExportPDF} className="flex items-center gap-2">
+                                        <Printer className="w-4 h-4" />PDF
+                                    </Button>
+                                </div>
+                                <p className="text-[11px] text-slate-400">
+                                    {analisis ? '✓ Incluyen los estados y el análisis IA' : analizando ? 'Incluirán el análisis IA cuando termine' : 'Incluyen los estados financieros'}
+                                </p>
                             </div>
                         </div>
 
-                        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 no-print">
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                             {[
                                 { label: 'Total Activo', v: bg.totalActivo },
                                 { label: 'Total Pasivo', v: bg.totalPasivo },
@@ -415,7 +437,7 @@ ROA: ${e.ratios.roa}% | ROE: ${e.ratios.roe}% | Endeudamiento: ${e.ratios.endeud
                         </div>
 
                         {/* Área imprimible: los dos estados */}
-                        <div id="reporte-imprimible" className="grid lg:grid-cols-2 gap-6 items-start">
+                        <div className="grid lg:grid-cols-2 gap-6 items-start print-stack">
                             <div className="bg-white rounded-2xl border border-slate-200 p-6">
                                 <div className="mb-4">
                                     <h3 className="font-bold text-slate-900 flex items-center gap-2"><Scale className="w-5 h-5 text-[#009FE3]" />Balance General</h3>
@@ -477,7 +499,7 @@ ROA: ${e.ratios.roa}% | ROE: ${e.ratios.roe}% | Endeudamiento: ${e.ratios.endeud
                         </div>
 
                         {/* ============ Análisis IA (en paralelo, sin botón) ============ */}
-                        <div className="bg-white rounded-2xl border border-slate-200 p-6 no-print">
+                        <div className={`bg-white rounded-2xl border border-slate-200 p-6 ${analisis ? 'print-analisis' : 'no-print'}`}>
                             {analizando && !analisis && (
                                 <div className="flex items-start gap-3">
                                     <Loader2 className="w-5 h-5 text-slate-500 animate-spin flex-shrink-0 mt-0.5" />
