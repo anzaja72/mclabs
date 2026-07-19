@@ -79,6 +79,8 @@ export default function BankRecsPage() {
     const [analisis, setAnalisis] = useState<AnalisisContable | null>(null)
     const [analizando, setAnalizando] = useState(false)
     const [analisisSegundos, setAnalisisSegundos] = useState(0)
+    type DetalleKey = 'banco' | 'contable' | 'coincidencias' | 'sinBanco' | 'sinContable'
+    const [detalle, setDetalle] = useState<DetalleKey | null>(null)
 
     const handleBankFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0]
@@ -359,7 +361,77 @@ export default function BankRecsPage() {
         })))
         XLSX.utils.book_append_sheet(wb, sinCruzarContable, 'Sin cruzar (Contable)')
 
+        // Listas COMPLETAS con el estado de cada partida
+        const todasBanco = [
+            ...result.matched.flatMap((m, i) => m.bank.map(t => ({ ...t, estado: `Conciliada (grupo ${i + 1})` }))),
+            ...result.unmatchedBank.map(t => ({ ...t, estado: 'Sin cruzar' })),
+        ]
+        XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(todasBanco.map(t => ({
+            'Fecha': t.date, 'Descripción': t.description, 'Monto': t.amount,
+            'Referencia': t.reference || '', 'Estado': t.estado,
+        }))), 'Extracto (todas)')
+
+        const todasContable = [
+            ...result.matched.flatMap((m, i) => m.ledger.map(t => ({ ...t, estado: `Conciliada (grupo ${i + 1})` }))),
+            ...result.unmatchedLedger.map(t => ({ ...t, estado: 'Sin cruzar' })),
+        ]
+        XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(todasContable.map(t => ({
+            'Fecha': t.date, 'Descripción': t.description, 'Débito': t.debit, 'Crédito': t.credit,
+            'Referencia': t.reference || '', 'Estado': t.estado,
+        }))), 'Contable (todas)')
+
+        agregarHojasInforme(wb)
+
         XLSX.writeFile(wb, `Conciliacion_Bancaria_${new Date().toISOString().split('T')[0]}.xlsx`)
+    }
+
+    /** Hojas del informe contable generado con IA (si existe). */
+    const agregarHojasInforme = (wb: XLSX.WorkBook) => {
+        if (!analisis) return
+
+        if (analisis.clasificacion?.length) {
+            XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(analisis.clasificacion.map(c => ({
+                'Origen': c.origen === 'banco' ? 'Extracto' : 'Libros',
+                'Concepto': c.concepto,
+                'Movimientos': c.cantidad,
+                'Valor': c.valor,
+                'Tipo': c.tipo,
+                'Naturaleza': c.naturaleza,
+                '¿Requiere ajuste?': c.requiereAjuste ? 'Sí' : 'No',
+                'Explicación': c.explicacion,
+            }))), 'Clasificación')
+        }
+
+        if (analisis.asientos?.length) {
+            XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(analisis.asientos.map(a => ({
+                'Concepto': a.concepto || '',
+                'Cuenta débito': a.debito?.cuenta || '',
+                'Nombre débito': a.debito?.nombre || '',
+                'Cuenta crédito': a.credito?.cuenta || '',
+                'Nombre crédito': a.credito?.nombre || '',
+                'Valor': a.valor,
+            }))), 'Asientos sugeridos')
+        }
+
+        if (analisis.costosBancarios?.conceptos?.length) {
+            const filas = analisis.costosBancarios.conceptos.map(c => ({
+                'Concepto': c.concepto, 'Movimientos': c.cantidad, 'Valor': c.valor,
+            }))
+            filas.push({ 'Concepto': 'TOTAL COSTOS Y GASTOS BANCARIOS', 'Movimientos': '' as never, 'Valor': analisis.costosBancarios.total })
+            XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(filas), 'Costos bancarios')
+        }
+
+        const diag: Record<string, string>[] = [{ 'Sección': 'Resumen', 'Contenido': analisis.resumen || '' }]
+        ;(analisis.alertas || []).forEach((a, i) => diag.push({ 'Sección': `Alerta ${i + 1}`, 'Contenido': a }))
+        XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(diag), 'Diagnóstico IA')
+    }
+
+    /** Descarga solo el informe contable generado con IA. */
+    const handleDescargarInforme = () => {
+        if (!analisis) return
+        const wb = XLSX.utils.book_new()
+        agregarHojasInforme(wb)
+        XLSX.writeFile(wb, `Informe_Contable_${new Date().toISOString().split('T')[0]}.xlsx`)
     }
 
     const handleNewReconciliation = () => {
@@ -633,28 +705,127 @@ export default function BankRecsPage() {
                             </div>
                         )}
 
-                        <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
-                            <div className="bg-slate-50 rounded-xl p-4 text-center">
-                                <p className="text-2xl font-bold text-slate-900">{result.summary.totalBankTransactions}</p>
-                                <p className="text-xs text-slate-500">Tx Bancarias</p>
-                            </div>
-                            <div className="bg-slate-50 rounded-xl p-4 text-center">
-                                <p className="text-2xl font-bold text-slate-900">{result.summary.totalLedgerTransactions}</p>
-                                <p className="text-xs text-slate-500">Tx Contables</p>
-                            </div>
-                            <div className="bg-green-50 rounded-xl p-4 text-center">
-                                <p className="text-2xl font-bold text-green-600">{result.summary.matchedCount}</p>
-                                <p className="text-xs text-green-600">Coincidencias</p>
-                            </div>
-                            <div className="bg-orange-50 rounded-xl p-4 text-center">
-                                <p className="text-2xl font-bold text-orange-600">{result.summary.unmatchedBankCount}</p>
-                                <p className="text-xs text-orange-600">Sin cruzar (Banco)</p>
-                            </div>
-                            <div className="bg-orange-50 rounded-xl p-4 text-center">
-                                <p className="text-2xl font-bold text-orange-600">{result.summary.unmatchedLedgerCount}</p>
-                                <p className="text-xs text-orange-600">Sin cruzar (Contable)</p>
-                            </div>
+                        <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-4">
+                            {([
+                                { k: 'banco', n: result.summary.totalBankTransactions, label: 'Tx Bancarias', bg: 'bg-slate-50', color: 'text-slate-900', sub: 'text-slate-500', ring: 'ring-slate-300' },
+                                { k: 'contable', n: result.summary.totalLedgerTransactions, label: 'Tx Contables', bg: 'bg-slate-50', color: 'text-slate-900', sub: 'text-slate-500', ring: 'ring-slate-300' },
+                                { k: 'coincidencias', n: result.summary.matchedCount, label: 'Coincidencias', bg: 'bg-green-50', color: 'text-green-600', sub: 'text-green-600', ring: 'ring-green-400' },
+                                { k: 'sinBanco', n: result.summary.unmatchedBankCount, label: 'Sin cruzar (Banco)', bg: 'bg-orange-50', color: 'text-orange-600', sub: 'text-orange-600', ring: 'ring-orange-400' },
+                                { k: 'sinContable', n: result.summary.unmatchedLedgerCount, label: 'Sin cruzar (Contable)', bg: 'bg-orange-50', color: 'text-orange-600', sub: 'text-orange-600', ring: 'ring-orange-400' },
+                            ] as const).map(c => (
+                                <button
+                                    key={c.k}
+                                    type="button"
+                                    onClick={() => setDetalle(detalle === c.k ? null : c.k)}
+                                    className={`${c.bg} rounded-xl p-4 text-center transition-all hover:shadow-md ${
+                                        detalle === c.k ? `ring-2 ${c.ring}` : ''
+                                    }`}
+                                >
+                                    <p className={`text-2xl font-bold ${c.color}`}>{c.n}</p>
+                                    <p className={`text-xs ${c.sub}`}>{c.label}</p>
+                                    <p className="text-[10px] text-slate-400 mt-1">
+                                        {detalle === c.k ? 'ocultar detalle' : 'ver detalle'}
+                                    </p>
+                                </button>
+                            ))}
                         </div>
+
+                        {/* Detalle desplegable de la tarjeta seleccionada */}
+                        {detalle && (
+                            <div className="mb-6 border border-slate-200 rounded-xl overflow-hidden">
+                                <div className="px-4 py-2 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
+                                    <span className="text-sm font-semibold text-slate-700">
+                                        {detalle === 'banco' && 'Todas las transacciones del extracto'}
+                                        {detalle === 'contable' && 'Todos los movimientos contables'}
+                                        {detalle === 'coincidencias' && 'Partidas conciliadas (banco ↔ contable)'}
+                                        {detalle === 'sinBanco' && 'Partidas del extracto sin cruzar'}
+                                        {detalle === 'sinContable' && 'Movimientos contables sin cruzar'}
+                                    </span>
+                                    <button onClick={() => setDetalle(null)} className="text-slate-400 hover:text-slate-600">
+                                        <X className="w-4 h-4" />
+                                    </button>
+                                </div>
+                                <div className="max-h-96 overflow-y-auto">
+                                    <table className="w-full text-sm">
+                                        <thead className="sticky top-0 bg-white shadow-sm">
+                                            <tr className="text-left text-slate-500 border-b border-slate-200">
+                                                {detalle === 'coincidencias' ? (
+                                                    <>
+                                                        <th className="py-2 px-4 font-medium">#</th>
+                                                        <th className="py-2 px-4 font-medium">Banco</th>
+                                                        <th className="py-2 px-4 font-medium">Contable</th>
+                                                        <th className="py-2 px-4 font-medium text-right">Valor</th>
+                                                    </>
+                                                ) : (
+                                                    <>
+                                                        <th className="py-2 px-4 font-medium">Fecha</th>
+                                                        <th className="py-2 px-4 font-medium">Descripción</th>
+                                                        <th className="py-2 px-4 font-medium">Referencia</th>
+                                                        <th className="py-2 px-4 font-medium text-right">Valor</th>
+                                                    </>
+                                                )}
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {detalle === 'coincidencias' && result.matched.map((m, i) => (
+                                                <tr key={i} className="border-b border-slate-100 align-top">
+                                                    <td className="py-2 px-4 text-slate-400">{i + 1}</td>
+                                                    <td className="py-2 px-4">
+                                                        {m.bank.map((t, j) => (
+                                                            <div key={j} className="text-slate-800">
+                                                                <span className="text-slate-400 mr-2">{t.date}</span>{t.description}
+                                                            </div>
+                                                        ))}
+                                                    </td>
+                                                    <td className="py-2 px-4">
+                                                        {m.ledger.map((t, j) => (
+                                                            <div key={j} className="text-slate-800">
+                                                                <span className="text-slate-400 mr-2">{t.date}</span>{t.description}
+                                                            </div>
+                                                        ))}
+                                                        {m.note && <p className="text-xs text-blue-600 mt-1">{m.note}</p>}
+                                                    </td>
+                                                    <td className="py-2 px-4 text-right font-semibold text-slate-900 whitespace-nowrap">
+                                                        ${Math.abs(m.bank.reduce((s, t) => s + t.amount, 0)).toLocaleString('es-CO')}
+                                                    </td>
+                                                </tr>
+                                            ))}
+                                            {(detalle === 'banco' || detalle === 'sinBanco') &&
+                                                (detalle === 'banco'
+                                                    ? [...result.matched.flatMap(m => m.bank), ...result.unmatchedBank]
+                                                    : result.unmatchedBank
+                                                ).map((t, i) => (
+                                                    <tr key={i} className="border-b border-slate-100">
+                                                        <td className="py-2 px-4 text-slate-500 whitespace-nowrap">{t.date}</td>
+                                                        <td className="py-2 px-4 text-slate-800">{t.description}</td>
+                                                        <td className="py-2 px-4 text-slate-400">{t.reference || '—'}</td>
+                                                        <td className={`py-2 px-4 text-right font-semibold whitespace-nowrap ${
+                                                            t.amount < 0 ? 'text-red-600' : 'text-green-700'
+                                                        }`}>
+                                                            ${Math.abs(t.amount).toLocaleString('es-CO')}
+                                                        </td>
+                                                    </tr>
+                                                ))}
+                                            {(detalle === 'contable' || detalle === 'sinContable') &&
+                                                (detalle === 'contable'
+                                                    ? [...result.matched.flatMap(m => m.ledger), ...result.unmatchedLedger]
+                                                    : result.unmatchedLedger
+                                                ).map((t, i) => (
+                                                    <tr key={i} className="border-b border-slate-100">
+                                                        <td className="py-2 px-4 text-slate-500 whitespace-nowrap">{t.date}</td>
+                                                        <td className="py-2 px-4 text-slate-800">{t.description}</td>
+                                                        <td className="py-2 px-4 text-slate-400">{t.reference || '—'}</td>
+                                                        <td className="py-2 px-4 text-right font-semibold text-slate-900 whitespace-nowrap">
+                                                            ${(t.debit || t.credit).toLocaleString('es-CO')}
+                                                            <span className="text-xs text-slate-400 ml-1">{t.debit ? 'D' : 'C'}</span>
+                                                        </td>
+                                                    </tr>
+                                                ))}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        )}
 
                         {/* Detalle de grupos consolidados (1:N o N:1) */}
                         {result.matched.some(g => g.bank.length > 1 || g.ledger.length > 1 || g.note) && (
@@ -715,7 +886,50 @@ export default function BankRecsPage() {
 
                             {analisis && (
                                 <div className="space-y-6">
-                                    <h3 className="font-bold text-slate-900 text-lg">Informe contable</h3>
+                                    <div className="flex items-center justify-between gap-4 flex-wrap">
+                                        <h3 className="font-bold text-slate-900 text-lg">Informe contable</h3>
+                                        <Button
+                                            variant="outline"
+                                            onClick={handleDescargarInforme}
+                                            className="flex items-center gap-2"
+                                        >
+                                            <Download className="w-4 h-4" />
+                                            Descargar informe IA
+                                        </Button>
+                                    </div>
+
+                                    {/* Costos y gastos bancarios consolidados */}
+                                    {analisis.costosBancarios && analisis.costosBancarios.total > 0 && (
+                                        <div className="p-4 bg-blue-50 border border-blue-200 rounded-xl">
+                                            <div className="flex items-baseline justify-between gap-4 mb-3">
+                                                <h4 className="font-semibold text-slate-900">
+                                                    Costos y gastos bancarios del período
+                                                </h4>
+                                                <span className="text-xl font-bold text-blue-700 whitespace-nowrap">
+                                                    ${Math.abs(analisis.costosBancarios.total).toLocaleString('es-CO')}
+                                                </span>
+                                            </div>
+                                            <div className="space-y-1">
+                                                {analisis.costosBancarios.conceptos?.map((c, i) => (
+                                                    <div key={i} className="flex justify-between text-sm text-slate-700">
+                                                        <span>
+                                                            {c.concepto}
+                                                            {c.cantidad > 1 && <span className="text-slate-400"> ×{c.cantidad}</span>}
+                                                        </span>
+                                                        <span className="whitespace-nowrap">
+                                                            ${Math.abs(Number(c.valor)).toLocaleString('es-CO')}
+                                                        </span>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                            <p className="text-xs text-blue-800 mt-3">
+                                                El banco los cobra desagregados; este es el total a reconocer como gasto
+                                                financiero{analisis.costosBancarios.cuentaSugerida
+                                                    ? ` (cuenta ${analisis.costosBancarios.cuentaSugerida})`
+                                                    : ''}.
+                                            </p>
+                                        </div>
+                                    )}
 
                                     {analisis.resumen && (
                                         <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl">

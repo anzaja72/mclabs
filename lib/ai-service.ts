@@ -153,6 +153,12 @@ export interface AnalisisContable {
         credito: { cuenta: string; nombre: string };
     }[];
     totales?: Record<string, number>;
+    /** Costos y gastos bancarios desagregados, consolidados en un total. */
+    costosBancarios?: {
+        conceptos: { concepto: string; cantidad: number; valor: number }[];
+        total: number;
+        cuentaSugerida?: string;
+    };
     resumen: string;
     alertas: string[];
 }
@@ -190,6 +196,7 @@ export const analizarConciliacion = async (
                 clasificacion: r.clasificacion || [],
                 asientos: r.asientos || [],
                 totales: r.totales,
+                costosBancarios: r.costosBancarios,
                 resumen: r.resumen || '',
                 alertas: r.alertas || [],
             };

@@ -34,16 +34,24 @@ B) De LIBROS, no reflejadas en el extracto:
 
 CUENTAS PUC: 110505 Banco · 530505 Gastos financieros-comisiones · 530595 GMF 4x1000 · 421005 Ingresos financieros-rendimientos · 130505 Clientes · 236540 Retención en la fuente · 240805 IVA descontable.
 
+CONSOLIDACIÓN DE COSTOS Y GASTOS BANCARIOS (obligatorio):
+Los bancos desagregan sus cobros en decenas de movimientos pequeños. Identifica TODOS los que sean
+costo o gasto bancario —comisiones, cuota de manejo, GMF/4x1000, IVA sobre comisiones, portes,
+chequeras, cobros por transferencia, cobros por servicio de nómina/proveedores/PSE, seguros— y
+consolídalos en "costosBancarios": el listado por concepto y la SUMA TOTAL del período. Este total
+es lo que el contador debe reconocer como gasto financiero del mes.
+
 Devuelve SOLO JSON estricto, sin markdown:
 {
  "clasificacion":[{"origen":"banco|libros","concepto":"...","cantidad":n,"valor":n,"tipo":"...","naturaleza":"temporal|permanente","requiereAjuste":true|false,"explicacion":"1 frase"}],
  "asientos":[{"concepto":"...","valor":n,"debito":{"cuenta":"530505","nombre":"..."},"credito":{"cuenta":"110505","nombre":"..."}}],
  "totales":{"notasDebitoNoRegistradas":n,"notasCreditoNoRegistradas":n,"depositosEnTransito":n,"chequesGiradosNoCobrados":n,"totalAjustesLibros":n},
+ "costosBancarios":{"conceptos":[{"concepto":"...","cantidad":n,"valor":n}],"total":n,"cuentaSugerida":"530505"},
  "resumen":"3-4 frases: qué explica la diferencia y qué debe hacer el contador",
  "alertas":["hallazgos que requieren atención"]
 }
 
-Reglas: clasifica TODOS los conceptos recibidos; asientos SOLO para permanentes (uno por concepto, por el total); explicaciones de 1 frase; números puros sin símbolos.`;
+Reglas: clasifica TODOS los conceptos recibidos; asientos SOLO para permanentes (uno por concepto, por el total); explicaciones de 1 frase; números puros sin símbolos; en "costosBancarios" usa valores POSITIVOS y suma correctamente el total.`;
 
 interface Partida { description?: string; amount?: number; debit?: number; credit?: number; date?: string }
 
