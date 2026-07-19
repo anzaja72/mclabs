@@ -51,7 +51,7 @@ Devuelve SOLO JSON estricto, sin markdown:
  "alertas":["hallazgos que requieren atención"]
 }
 
-Reglas: clasifica TODOS los conceptos recibidos; asientos SOLO para permanentes (uno por concepto, por el total); explicaciones de 1 frase; números puros sin símbolos; en "costosBancarios" usa valores POSITIVOS y suma correctamente el total.`;
+Reglas: clasifica TODOS los conceptos recibidos; asientos SOLO para permanentes (uno por concepto, por el total); explicaciones de 1 frase; números puros sin símbolos; en "costosBancarios" usa valores POSITIVOS y suma correctamente el total; NUNCA uses comillas dobles dentro de los textos (usa comillas simples).`;
 
 interface Partida { description?: string; amount?: number; debit?: number; credit?: number; date?: string }
 
@@ -122,6 +122,11 @@ ${gBanco.map(g => `${g.concepto} | ${g.cantidad} | ${g.total}`).join('\n') || '(
 CONCEPTOS DE LIBROS SIN CRUZAR (concepto | # movimientos | valor total):
 ${gLibros.map(g => `${g.concepto} | ${g.cantidad} | ${g.total}`).join('\n') || '(ninguno)'}`;
 
+        // El JSON del modelo falla de forma intermitente (comillas mal escapadas):
+        // reintentar una vez suele resolverlo y aquí hay tiempo de sobra.
+        let parsed: Record<string, unknown> | null = null;
+        let lastApiError = '';
+        for (let intento = 0; intento < 2 && !parsed; intento++) {
         const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
             method: 'POST',
             headers: { Authorization: `Bearer ${OPENROUTER_KEY}`, 'Content-Type': 'application/json' },
@@ -139,12 +144,14 @@ ${gLibros.map(g => `${g.concepto} | ${g.cantidad} | ${g.total}`).join('\n') || '
 
         const json = await res.json();
         const text = json?.choices?.[0]?.message?.content;
-        const parsed = text ? parseObj(text) : null;
+        parsed = text ? parseObj(text) : null;
+        if (!parsed) lastApiError = json?.error?.message || '';
+        }
 
         if (!parsed) {
             await admin.from('ai_jobs').update({
                 estado: 'error',
-                error: json?.error?.message || 'No se pudo generar el análisis contable.',
+                error: lastApiError || 'No se pudo generar el análisis contable.',
             }).eq('id', jobId);
             return new Response('no data', { status: 200 });
         }

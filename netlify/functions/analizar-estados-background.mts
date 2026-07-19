@@ -37,7 +37,8 @@ Reglas:
 2. Si el balance NO cuadra, esa es la alerta #1: explica el monto y las causas probables (cuentas omitidas, signo invertido, depreciación mal calculada).
 3. Benchmarks de referencia Colombia: razón corriente sana 1.2-2.0; endeudamiento <60%; margen neto pyme comercial 3-7%.
 4. Máximo 5 alertas, 4 fortalezas, 5 recomendaciones, 4 notas.
-5. Números con formato colombiano en los textos ($1.234.567).`;
+5. Números con formato colombiano en los textos ($1.234.567).
+6. NUNCA uses comillas dobles dentro de los textos de los campos (usa comillas simples si necesitas citar).`;
 
 function parseObj(text: string): Record<string, unknown> | null {
     const clean = text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
@@ -94,6 +95,11 @@ export default async (req: Request, _context: Context) => {
             return new Response('credit error', { status: 200 });
         }
 
+        // El JSON del modelo falla de forma intermitente (comillas mal escapadas):
+        // reintentar una vez suele resolverlo y aquí hay tiempo de sobra.
+        let parsed: Record<string, unknown> | null = null;
+        let lastApiError = '';
+        for (let intento = 0; intento < 2 && !parsed; intento++) {
         const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
             method: 'POST',
             headers: { Authorization: `Bearer ${OPENROUTER_KEY}`, 'Content-Type': 'application/json' },
@@ -111,7 +117,9 @@ export default async (req: Request, _context: Context) => {
 
         const json = await res.json();
         const text = json?.choices?.[0]?.message?.content;
-        const parsed = text ? parseObj(text) : null;
+        parsed = text ? parseObj(text) : null;
+        if (!parsed) lastApiError = json?.error?.message || '';
+        }
 
         if (!parsed) {
             await admin.rpc('creditos_acreditar', {
@@ -121,7 +129,7 @@ export default async (req: Request, _context: Context) => {
             });
             await admin.from('ai_jobs').update({
                 estado: 'error',
-                error: json?.error?.message || 'No se pudo generar el análisis financiero.',
+                error: lastApiError || 'No se pudo generar el análisis financiero.',
             }).eq('id', jobId);
             return new Response('no data', { status: 200 });
         }
