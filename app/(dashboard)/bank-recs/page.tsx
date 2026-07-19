@@ -79,6 +79,7 @@ export default function BankRecsPage() {
     const [analisis, setAnalisis] = useState<AnalisisContable | null>(null)
     const [analizando, setAnalizando] = useState(false)
     const [analisisSegundos, setAnalisisSegundos] = useState(0)
+    const [analisisError, setAnalisisError] = useState('')
     type DetalleKey = 'banco' | 'contable' | 'coincidencias' | 'sinBanco' | 'sinContable'
     const [detalle, setDetalle] = useState<DetalleKey | null>(null)
 
@@ -254,6 +255,7 @@ export default function BankRecsPage() {
         setErrorMessage('')
         setResult(null)
         setAnalisis(null)
+        setAnalisisError('')
 
         try {
             // 0. Check credits (validación rápida; el servidor valida y descuenta de forma definitiva)
@@ -284,6 +286,8 @@ export default function BankRecsPage() {
 
             setResult(reconciliationResult)
             setStatus('success')
+            // El informe contable se genera en paralelo: no bloquea los resultados
+            void lanzarAnalisisContable(reconciliationResult)
         } catch (error: any) {
             if (error instanceof NeedsPurchaseError) {
                 setShowPaywall(true)
@@ -298,19 +302,25 @@ export default function BankRecsPage() {
         }
     }
 
-    const handleAnalisisContable = async () => {
-        if (!result) return
+    /**
+     * Genera el informe contable EN PARALELO: se dispara apenas hay resultados
+     * del cruce, sin bloquearlos. El usuario ve las coincidencias de una vez y
+     * el informe va apareciendo cuando termina.
+     */
+    const lanzarAnalisisContable = async (res: ReconciliationResult) => {
+        if (res.unmatchedBank.length === 0 && res.unmatchedLedger.length === 0) return
         setAnalizando(true)
         setAnalisisSegundos(0)
+        setAnalisisError('')
         try {
             const a = await analizarConciliacion(
-                result.unmatchedBank,
-                result.unmatchedLedger,
+                res.unmatchedBank,
+                res.unmatchedLedger,
                 (s) => setAnalisisSegundos(s)
             )
             setAnalisis(a)
         } catch (e: any) {
-            setErrorMessage(e?.message || 'No se pudo generar el informe contable')
+            setAnalisisError(e?.message || 'No se pudo generar el informe contable')
         } finally {
             setAnalizando(false)
         }
@@ -863,24 +873,37 @@ export default function BankRecsPage() {
 
                         {/* Informe contable (metodología colombiana) */}
                         <div className="border-t border-slate-200 pt-6">
-                            {!analisis && (
+                            {/* El informe se genera solo, en paralelo con los resultados */}
+                            {!analisis && analizando && (
+                                <div className="flex items-start gap-3 p-4 bg-slate-50 border border-slate-200 rounded-xl">
+                                    <Loader2 className="w-5 h-5 text-slate-500 animate-spin flex-shrink-0 mt-0.5" />
+                                    <div>
+                                        <p className="text-sm font-semibold text-slate-800">
+                                            Generando informe contable… {analisisSegundos > 0 ? `${analisisSegundos}s` : ''}
+                                        </p>
+                                        <p className="text-xs text-slate-500 mt-1">
+                                            Clasifica las partidas sin cruzar (temporales vs. permanentes), consolida los
+                                            costos bancarios y propone los asientos con cuentas PUC. Puedes revisar el
+                                            detalle del cruce mientras tanto.
+                                        </p>
+                                    </div>
+                                </div>
+                            )}
+
+                            {!analisis && !analizando && analisisError && (
                                 <div className="flex flex-col items-start gap-2">
+                                    <div className="flex items-start gap-2 p-3 bg-red-50 border border-red-200 rounded-lg w-full">
+                                        <AlertCircle className="w-4 h-4 text-red-600 flex-shrink-0 mt-0.5" />
+                                        <p className="text-sm text-red-700">{analisisError}</p>
+                                    </div>
                                     <Button
-                                        onClick={handleAnalisisContable}
-                                        disabled={analizando}
-                                        className="bg-slate-900 hover:bg-slate-800 text-white flex items-center gap-2"
+                                        onClick={() => result && lanzarAnalisisContable(result)}
+                                        variant="outline"
+                                        className="flex items-center gap-2"
                                     >
-                                        {analizando ? (
-                                            <><Loader2 className="w-4 h-4 animate-spin" />
-                                            Analizando… {analisisSegundos > 0 ? `${analisisSegundos}s` : ''}</>
-                                        ) : (
-                                            <><Sparkles className="w-4 h-4" />Generar informe contable</>
-                                        )}
+                                        <Sparkles className="w-4 h-4" />
+                                        Reintentar informe contable
                                     </Button>
-                                    <p className="text-xs text-slate-500">
-                                        Clasifica las partidas sin cruzar (diferencias temporales vs. permanentes) y
-                                        propone los asientos contables con cuentas PUC.
-                                    </p>
                                 </div>
                             )}
 
