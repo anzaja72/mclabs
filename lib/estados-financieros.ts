@@ -155,6 +155,107 @@ export function parsearCuentas(rows: Record<string, unknown>[]): CuentaSaldo[] {
     return [...mapa.values()].sort((a, b) => a.codigo.localeCompare(b.codigo))
 }
 
+/**
+ * Parser robusto para exportes reales de software contable (hoja completa).
+ *
+ * Maneja los formatos típicos:
+ *  - Filas de título antes de los encabezados (empresa, período, normas):
+ *    el encabezado se localiza automáticamente en las primeras 30 filas.
+ *  - "Cuenta" con código y nombre en la misma celda ("11050501 CAJA GENERAL")
+ *    que aparece UNA vez por bloque; los movimientos de abajo van con la
+ *    celda vacía (se arrastra la cuenta vigente).
+ *  - Filas "Total …" / "Sumas …" de subtotales: se saltan (evita duplicar).
+ *  - Balances jerárquicos (clase/grupo/cuenta/subcuenta): si un código es
+ *    prefijo de otros y su valor es la suma exacta de sus hijos, es una fila
+ *    de agregación y se descarta.
+ *  - Balance de prueba plano (una fila por cuenta): funciona igual.
+ */
+export function parsearCuentasDesdeHoja(aoa: unknown[][]): CuentaSaldo[] {
+    if (!aoa?.length) return []
+
+    // 1) Localizar la fila de encabezados
+    let headerIdx = -1
+    for (let i = 0; i < Math.min(aoa.length, 30); i++) {
+        const cells = (aoa[i] || []).map(c => normalizar(String(c ?? '')))
+        const hasCuenta = cells.some(c => /(cuenta|codigo|puc)/.test(c) || c === 'cta')
+        const hasValor = cells.some(c => /(debito|debitos|debe|credito|creditos|haber|saldo)/.test(c))
+        if (hasCuenta && hasValor) { headerIdx = i; break }
+    }
+    if (headerIdx === -1) return []
+
+    const headers = (aoa[headerIdx] || []).map(c => normalizar(String(c ?? '')))
+    const findIdx = (cands: string[], exclude: string[] = []) => {
+        for (const c of cands) {
+            const idx = headers.findIndex(h => h && !exclude.some(e => h.includes(e)) && h.includes(c))
+            if (idx !== -1) return idx
+        }
+        return -1
+    }
+    const iCod = findIdx(['codigo cuenta', 'codigo puc', 'cuenta puc', 'codigo', 'cuenta', 'cta'])
+    const iNom = findIdx(['nombre cuenta', 'cuenta contable', 'nombre', 'descripcion'], ['codigo'])
+    const iDeb = findIdx(['debito', 'debe'], ['saldo'])
+    const iCre = findIdx(['credito', 'haber'], ['saldo'])
+    const iSal = findIdx(['saldo final', 'saldo actual', 'nuevo saldo', 'saldo'], ['inicial', 'anterior'])
+    if (iCod === -1) return []
+
+    const mapa = new Map<string, CuentaSaldo>()
+    let actual: CuentaSaldo | null = null
+
+    for (let i = headerIdx + 1; i < aoa.length; i++) {
+        const row = aoa[i] || []
+        const celdaCod = String(row[iCod] ?? '').trim()
+        const norm = normalizar(celdaCod)
+
+        // Subtotales del software: cierran el bloque y no suman
+        if (/^(total|sumas|suma general)/.test(norm)) { actual = null; continue }
+
+        if (celdaCod) {
+            const m = celdaCod.match(/^(\d{1,10})\s*[-–—.]?\s*(.*)$/)
+            if (m && /^[1-9]/.test(m[1])) {
+                const codigo = m[1]
+                const nombreCelda = (m[2] || '').trim()
+                const nombreCol = iNom !== -1 ? String(row[iNom] ?? '').trim() : ''
+                const existente = mapa.get(codigo)
+                actual = existente ?? { codigo, nombre: nombreCelda || nombreCol, debito: 0, credito: 0 }
+                if (!existente) mapa.set(codigo, actual)
+                else if (!actual.nombre && (nombreCelda || nombreCol)) actual.nombre = nombreCelda || nombreCol
+            } else {
+                // Texto que no es cuenta (títulos intermedios): cierra el bloque
+                actual = null
+                continue
+            }
+        }
+        if (!actual) continue
+
+        let deb = iDeb !== -1 ? num(row[iDeb]) : 0
+        let cre = iCre !== -1 ? num(row[iCre]) : 0
+        // Archivo solo con saldo: asignar el lado según la naturaleza de la clase
+        if (iDeb === -1 && iCre === -1 && iSal !== -1) {
+            const s = num(row[iSal])
+            const naturalezaDebito = ['1', '5', '6', '7'].includes(actual.codigo[0])
+            if (naturalezaDebito) { if (s >= 0) deb = s; else cre = -s }
+            else { if (s >= 0) cre = s; else deb = -s }
+        }
+        actual.debito += deb
+        actual.credito += cre
+    }
+
+    // 2) Filtrar filas de agregación jerárquica (padre = suma exacta de hijos)
+    const lista = [...mapa.values()]
+    const sinAgregadas = lista.filter(p => {
+        const hijos = lista.filter(h => h !== p && h.codigo.startsWith(p.codigo))
+        if (hijos.length === 0) return true
+        const sumaDeb = hijos.reduce((s, h) => s + h.debito, 0)
+        const sumaCre = hijos.reduce((s, h) => s + h.credito, 0)
+        return !(Math.abs(p.debito - sumaDeb) < 1 && Math.abs(p.credito - sumaCre) < 1)
+    })
+
+    return sinAgregadas
+        .filter(c => c.debito !== 0 || c.credito !== 0)
+        .map(c => ({ ...c, debito: redondear(c.debito), credito: redondear(c.credito) }))
+        .sort((a, b) => a.codigo.localeCompare(b.codigo))
+}
+
 /* ============ Nombres PUC de respaldo (cuando el archivo no trae nombre) ============ */
 
 const NOMBRES_PUC: Record<string, string> = {

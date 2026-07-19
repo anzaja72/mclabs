@@ -12,7 +12,7 @@ import {
 import * as XLSX from 'xlsx'
 import { analizarEstadosFinancieros, NeedsPurchaseError } from '@/lib/ai-service'
 import type { AnalisisEstados } from '@/lib/ai-service'
-import { parsearCuentas, construirEstados } from '@/lib/estados-financieros'
+import { parsearCuentasDesdeHoja, construirEstados } from '@/lib/estados-financieros'
 import type { EstadosFinancieros, LineaEstado } from '@/lib/estados-financieros'
 import { useCredits } from '@/lib/credits-context'
 import { CreditsBanner } from '@/components/credits-banner'
@@ -114,10 +114,13 @@ ROA: ${e.ratios.roa}% | ROE: ${e.ratios.roe}% | Endeudamiento: ${e.ratios.endeud
             }
             const buf = await file.arrayBuffer()
             const wb = XLSX.read(buf, { type: 'array' })
-            const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(wb.Sheets[wb.SheetNames[0]])
-            const cuentas = parsearCuentas(rows)
+            // Hoja completa (fila por fila): el parser localiza los encabezados
+            // automáticamente aunque haya títulos arriba, y entiende los
+            // formatos de exporte de los software contables.
+            const aoa = XLSX.utils.sheet_to_json<unknown[]>(wb.Sheets[wb.SheetNames[0]], { header: 1, defval: '' })
+            const cuentas = parsearCuentasDesdeHoja(aoa)
             if (cuentas.length === 0) {
-                throw new Error('No se encontraron cuentas PUC en el archivo. Verifica que tenga columnas de código de cuenta y débito/crédito (o saldo).')
+                throw new Error('No se encontraron cuentas PUC en el archivo. El sistema busca una columna de cuenta (código PUC) y columnas de débito/crédito o saldo, incluso si hay títulos encima. Si tu software exporta distinto, envíanos el archivo a soporte.')
             }
             const e = construirEstados(cuentas)
             setEstados(e)
