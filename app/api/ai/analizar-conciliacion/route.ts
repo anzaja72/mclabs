@@ -19,7 +19,7 @@ const MAX_ITEMS = 300;
  */
 const SYSTEM_PROMPT = `Eres un contador público colombiano experto en conciliaciones bancarias, con dominio del PUC, el Decreto 2649 de 1993, NIIF (NIC 7) y el Estatuto Tributario.
 
-Recibirás las partidas que NO cruzaron en una conciliación bancaria y los saldos. Debes producir el análisis contable profesional.
+Recibirás CONCEPTOS AGRUPADOS de las partidas que NO cruzaron en una conciliación bancaria (cada línea trae: concepto, cuántos movimientos y el valor total) y los saldos. Debes producir el análisis contable profesional POR CONCEPTO.
 
 CLASIFICACIÓN OBLIGATORIA de cada partida:
 
@@ -44,7 +44,7 @@ CUENTAS PUC para los asientos sugeridos:
 Devuelve SOLO un JSON estricto, sin markdown:
 {
   "clasificacion": [
-    { "origen": "banco|libros", "indice": numero, "descripcion": "texto original", "valor": numero,
+    { "origen": "banco|libros", "indice": numero, "concepto": "texto del concepto", "cantidad": numero, "valor": numero,
       "tipo": "nota_debito_no_registrada|nota_credito_no_registrada|cheque_devuelto|error_banco|deposito_en_transito|cheque_girado_no_cobrado|error_registro",
       "naturaleza": "temporal|permanente", "requiereAjuste": true|false, "explicacion": "1 frase clara" }
   ],
@@ -66,13 +66,44 @@ Devuelve SOLO un JSON estricto, sin markdown:
 }
 
 Reglas:
-1. Clasifica TODAS las partidas recibidas; no inventes ninguna.
+1. Clasifica TODOS los conceptos recibidos (uno por línea); no inventes ninguno.
 2. Los asientos solo para diferencias PERMANENTES (las temporales no se registran).
-3. Agrupa conceptos repetidos (ej. varios 4x1000) en un solo asiento por el total.
+3. Un asiento por concepto, por el valor TOTAL del grupo.
+4. Sé conciso: "explicacion" máximo 1 frase corta.
 4. Si no recibes saldos, calcula lo que puedas y marca cuadra=false explicándolo en el resumen.
 5. Valores numéricos puros, sin símbolos.`;
 
 interface Partida { description: string; amount?: number; debit?: number; credit?: number; date?: string; reference?: string }
+
+interface Grupo { concepto: string; cantidad: number; total: number; ejemploFecha: string }
+
+/**
+ * Agrupa partidas por concepto (quitando números/fechas de la descripción).
+ * Un extracto trae decenas de "GMF 4X1000" o "CUOTA MANEJO": al contador le
+ * sirve un asiento por concepto, no 111 líneas. Además reduce muchísimo el
+ * tamaño de la respuesta de la IA (y con ello el tiempo).
+ */
+function agrupar(items: Partida[], valor: (p: Partida) => number): Grupo[] {
+    const clave = (d: string) =>
+        (d || '')
+            .toUpperCase()
+            .normalize('NFD').replace(/[̀-ͯ]/g, '')
+            .replace(/\d+/g, ' ')
+            .replace(/[^A-ZÑ\s]/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim()
+            .slice(0, 40);
+
+    const mapa = new Map<string, Grupo>();
+    for (const it of items) {
+        const k = clave(it.description) || 'SIN DESCRIPCION';
+        const g = mapa.get(k) ?? { concepto: it.description || k, cantidad: 0, total: 0, ejemploFecha: it.date || '' };
+        g.cantidad += 1;
+        g.total += valor(it);
+        mapa.set(k, g);
+    }
+    return [...mapa.values()].sort((a, b) => Math.abs(b.total) - Math.abs(a.total));
+}
 
 export async function POST(request: NextRequest) {
     const user = await getUserFromRequest(request);
@@ -95,11 +126,16 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ error: 'No hay partidas por analizar' }, { status: 400 });
     }
 
-    const bancoList = unmatchedBank.slice(0, MAX_ITEMS)
-        .map((t, i) => `${i}| ${t.date || ''} | ${t.description} | ${t.amount ?? 0} | ${t.reference || ''}`)
+    // Agrupar por concepto: el contador necesita un asiento por concepto,
+    // no una línea por movimiento.
+    const gruposBanco = agrupar(unmatchedBank.slice(0, MAX_ITEMS), t => t.amount ?? 0).slice(0, 60);
+    const gruposLibros = agrupar(unmatchedLedger.slice(0, MAX_ITEMS), t => (t.debit || 0) - (t.credit || 0)).slice(0, 60);
+
+    const bancoList = gruposBanco
+        .map((g, i) => `${i}| ${g.concepto} | ${g.cantidad} movimiento(s) | total ${g.total} | ${g.ejemploFecha}`)
         .join('\n');
-    const librosList = unmatchedLedger.slice(0, MAX_ITEMS)
-        .map((t, i) => `${i}| ${t.date || ''} | ${t.description} | D:${t.debit ?? 0} C:${t.credit ?? 0} | ${t.reference || ''}`)
+    const librosList = gruposLibros
+        .map((g, i) => `${i}| ${g.concepto} | ${g.cantidad} movimiento(s) | total ${g.total} | ${g.ejemploFecha}`)
         .join('\n');
 
     try {
@@ -109,10 +145,10 @@ export async function POST(request: NextRequest) {
 - Saldo según extracto bancario: ${saldoExtracto ?? 'no suministrado'}
 - Saldo según libros: ${saldoLibros ?? 'no suministrado'}
 
-PARTIDAS DEL EXTRACTO SIN CRUZAR (índice| fecha | descripción | valor | referencia):
+CONCEPTOS DEL EXTRACTO SIN CRUZAR (índice| concepto | # movimientos | valor total | fecha ejemplo):
 ${bancoList || '(ninguna)'}
 
-PARTIDAS DE LIBROS SIN CRUZAR (índice| fecha | descripción | débito/crédito | referencia):
+CONCEPTOS DE LIBROS SIN CRUZAR (índice| concepto | # movimientos | valor total | fecha ejemplo):
 ${librosList || '(ninguna)'}`;
 
         // Privacy Shield: oculta nombres/cédulas de terceros, nunca los montos
@@ -126,7 +162,7 @@ ${librosList || '(ninguna)'}`;
             ],
             response_format: { type: 'json_object' },
             temperature: 0.2,
-            max_tokens: 12000,
+            max_tokens: 6000,
         });
 
         const raw = completion.choices[0]?.message?.content;
