@@ -142,6 +142,63 @@ export const extractBankDataFromPDF = async (
     throw new Error('El procesamiento tardó demasiado. Intenta con un extracto más corto.');
 };
 
+export interface AnalisisContable {
+    clasificacion: {
+        origen: 'banco' | 'libros'; concepto: string; cantidad: number; valor: number;
+        tipo: string; naturaleza: 'temporal' | 'permanente'; requiereAjuste: boolean; explicacion: string;
+    }[];
+    asientos: {
+        concepto: string; valor: number;
+        debito: { cuenta: string; nombre: string };
+        credito: { cuenta: string; nombre: string };
+    }[];
+    totales?: Record<string, number>;
+    resumen: string;
+    alertas: string[];
+}
+
+/**
+ * Análisis contable colombiano de las partidas sin cruzar: clasifica cada
+ * concepto (diferencia temporal vs. permanente) y propone los asientos con
+ * cuentas PUC. Corre en segundo plano (la respuesta es larga).
+ */
+export const analizarConciliacion = async (
+    unmatchedBank: unknown[],
+    unmatchedLedger: unknown[],
+    onProgress?: (segundos: number) => void
+): Promise<AnalisisContable> => {
+    const token = await getAccessToken();
+    const jobId = crypto.randomUUID();
+
+    const res = await fetch('/.netlify/functions/analizar-conciliacion-background', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ jobId, unmatchedBank, unmatchedLedger }),
+    });
+    if (res.status !== 202 && !res.ok) throw new Error('No se pudo iniciar el análisis contable.');
+
+    const inicio = Date.now();
+    while (Date.now() - inicio < 5 * 60 * 1000) {
+        await new Promise(r => setTimeout(r, 2500));
+        onProgress?.(Math.round((Date.now() - inicio) / 1000));
+        const { data } = await supabase
+            .from('ai_jobs').select('estado, resultado, error').eq('id', jobId).maybeSingle();
+        if (!data) continue;
+        if (data.estado === 'listo') {
+            const r = (data.resultado || {}) as Partial<AnalisisContable>;
+            return {
+                clasificacion: r.clasificacion || [],
+                asientos: r.asientos || [],
+                totales: r.totales,
+                resumen: r.resumen || '',
+                alertas: r.alertas || [],
+            };
+        }
+        if (data.estado === 'error') throw new Error(data.error || 'Error en el análisis contable.');
+    }
+    throw new Error('El análisis contable tardó demasiado.');
+};
+
 export interface AIReconcileResult {
     matched: { bank: number[]; ledger: number[]; note?: string }[];
     unmatchedBank: number[];
