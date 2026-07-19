@@ -98,12 +98,13 @@ export async function POST(request: NextRequest) {
             }
         };
 
-        // Nivel 1: 'pdf-text' gratis (facturas digitales). Nivel 2: OCR si falló.
-        let parsed = await runExtraction(isPdf ? 'pdf-text' : null);
-        if (isPdf && !hasInvoiceData(parsed)) {
-            parsed = await runExtraction('mistral-ocr');
+        // Una sola llamada: el motor gratuito 'pdf-text' resultó lento y poco
+        // fiable en documentos reales (78s y 0 datos en un extracto), y dos
+        // intentos encadenados superan el corte de ~31s de Netlify.
+        const parsed = await runExtraction(isPdf ? 'mistral-ocr' : null);
+        if (!parsed || !hasInvoiceData(parsed)) {
+            throw new Error('No se pudieron leer los datos de la factura. Prueba con un archivo más legible.');
         }
-        if (!parsed) throw new Error('La IA no devolvió datos válidos.');
 
         return NextResponse.json({
             invoice: {
