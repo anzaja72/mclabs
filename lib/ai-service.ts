@@ -92,15 +92,54 @@ export interface LedgerTransaction {
     reference?: string;
 }
 
+/**
+ * Extrae el extracto bancario en SEGUNDO PLANO.
+ *
+ * El OCR de un extracto real tarda ~35s o más y Netlify corta las peticiones
+ * normales a ~31s. Por eso el trabajo lo hace una función `-background`
+ * (hasta 15 min) y aquí solo consultamos el resultado.
+ */
 export const extractBankDataFromPDF = async (
-    file: File
+    file: File,
+    onProgress?: (segundos: number) => void
 ): Promise<{ transactions: BankTransaction[]; credits?: UserCredits }> => {
     const base64 = await fileToBase64(file);
-    const data = await postAI<{ transactions: BankTransaction[] }>('/api/ai/extract-bank', {
-        base64,
-        mimeType: file.type || 'application/pdf',
+    const token = await getAccessToken();
+    const jobId = crypto.randomUUID();
+
+    const res = await fetch('/.netlify/functions/extract-bank-background', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ jobId, base64, mimeType: file.type || 'application/pdf' }),
     });
-    return { transactions: data.transactions, credits: data.credits };
+    if (res.status !== 202 && !res.ok) {
+        throw new Error('No se pudo iniciar el procesamiento del extracto.');
+    }
+
+    // Consultar el resultado (RLS: cada quien ve solo sus trabajos)
+    const inicio = Date.now();
+    const LIMITE_MS = 5 * 60 * 1000;
+    while (Date.now() - inicio < LIMITE_MS) {
+        await new Promise(r => setTimeout(r, 2500));
+        onProgress?.(Math.round((Date.now() - inicio) / 1000));
+
+        const { data } = await supabase
+            .from('ai_jobs')
+            .select('estado, resultado, error')
+            .eq('id', jobId)
+            .maybeSingle();
+
+        if (!data) continue;
+        if (data.estado === 'listo') {
+            const transactions = (data.resultado as { transactions?: BankTransaction[] })?.transactions || [];
+            return { transactions };
+        }
+        if (data.estado === 'error') {
+            if (data.error === 'SIN_CREDITOS') throw new NeedsPurchaseError();
+            throw new Error(data.error || 'Error procesando el extracto bancario.');
+        }
+    }
+    throw new Error('El procesamiento tardó demasiado. Intenta con un extracto más corto.');
 };
 
 export interface AIReconcileResult {

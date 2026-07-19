@@ -87,19 +87,83 @@ export default function BankRecsPage() {
 
 
 
+    /** Normaliza un encabezado: sin tildes, minúsculas, sin espacios extra. */
+    const normalizeHeader = (h: string) =>
+        h.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/\s+/g, ' ').trim()
+
+    /** Convierte fechas de Excel (texto DD-MM-YYYY, DD/MM/YYYY o serial) a YYYY-MM-DD. */
+    const normalizeDate = (value: unknown): string => {
+        if (value == null || value === '') return ''
+        // Serial de Excel (número de días desde 1899-12-30)
+        if (typeof value === 'number') {
+            const d = new Date(Math.round((value - 25569) * 86400 * 1000))
+            return isNaN(d.getTime()) ? '' : d.toISOString().slice(0, 10)
+        }
+        const s = String(value).trim()
+        // DD-MM-YYYY o DD/MM/YYYY
+        const m = s.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})$/)
+        if (m) return `${m[3]}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}`
+        // YYYY-MM-DD (ya correcto)
+        if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10)
+        return s
+    }
+
     const parseLedgerExcel = async (file: File): Promise<LedgerTransaction[]> => {
         const arrayBuffer = await file.arrayBuffer()
         const workbook = XLSX.read(arrayBuffer, { type: 'array' })
         const firstSheet = workbook.Sheets[workbook.SheetNames[0]]
-        const data = XLSX.utils.sheet_to_json(firstSheet)
+        const data = XLSX.utils.sheet_to_json<Record<string, unknown>>(firstSheet)
+        if (data.length === 0) return []
 
-        return data.map((row: any) => ({
-            date: row.Fecha || row.fecha || row.Date || row.date || '',
-            description: row.Descripcion || row.descripcion || row.Description || row.description || row.Concepto || '',
-            debit: parseFloat(row.Debito || row.debito || row.Debit || row.debit || 0) || 0,
-            credit: parseFloat(row.Credito || row.credito || row.Credit || row.credit || 0) || 0,
-            reference: row.Referencia || row.referencia || row.Reference || row.reference || ''
-        }))
+        // Mapea los encabezados reales del archivo a los campos que necesitamos.
+        // Soporta variantes: "Fecha Elaboración", "Débito"/"Debe", "Crédito"/"Haber", etc.
+        const headers = Object.keys(data[0])
+        // Busca por prioridad de candidato (no por orden de columnas): así el
+        // resultado es determinista aunque el archivo cambie el orden.
+        const findCol = (candidates: string[], exclude: string[] = []) => {
+            for (const c of candidates) {
+                const hit = headers.find(h => {
+                    const n = normalizeHeader(h)
+                    if (exclude.some(e => n.includes(e))) return false
+                    return n.includes(c)
+                })
+                if (hit) return hit
+            }
+            return undefined
+        }
+
+        // "saldo" se excluye para no confundir "Saldo inicial"/"Saldo total" con montos
+        const colDate = findCol(['fecha', 'date'])
+        const colDesc = findCol(['descripcion', 'concepto', 'detalle', 'description'])
+        // El nombre del tercero es clave para cruzar contra el extracto
+        const colTercero = findCol(['nombre tercero', 'tercero', 'beneficiario', 'razon social'])
+        const colDebit = findCol(['debito', 'debe', 'debit'], ['saldo'])
+        const colCredit = findCol(['credito', 'haber', 'credit'], ['saldo'])
+        const colRef = findCol(['comprobante', 'referencia', 'reference', 'documento', 'numero'])
+
+        const num = (v: unknown) => {
+            if (typeof v === 'number') return v
+            if (v == null || v === '') return 0
+            // Quita separadores de miles y símbolos, respeta la coma decimal
+            const s = String(v).replace(/[^\d,.-]/g, '').replace(/\.(?=\d{3}\b)/g, '').replace(',', '.')
+            return parseFloat(s) || 0
+        }
+
+        return data
+            .map(row => {
+                const desc = String((colDesc ? row[colDesc] : '') ?? '').trim()
+                const tercero = String((colTercero ? row[colTercero] : '') ?? '').trim()
+                return {
+                    date: normalizeDate(colDate ? row[colDate] : ''),
+                    // Descripción + tercero: máximo contexto para el cruce
+                    description: [desc, tercero].filter(Boolean).join(' — '),
+                    debit: num(colDebit ? row[colDebit] : 0),
+                    credit: num(colCredit ? row[colCredit] : 0),
+                    reference: String((colRef ? row[colRef] : '') ?? '').trim(),
+                }
+            })
+            // Descarta filas sin movimiento (totales, separadores)
+            .filter(r => r.debit !== 0 || r.credit !== 0)
     }
 
     const performReconciliation = (
