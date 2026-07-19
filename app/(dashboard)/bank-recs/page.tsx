@@ -65,12 +65,13 @@ interface ReconciliationResult {
 
 export default function BankRecsPage() {
     const { user } = useAuth()
-    const { getToolCredits, setCredits } = useCredits()
+    const { getToolCredits, refreshCredits } = useCredits()
     const [showPaywall, setShowPaywall] = useState(false)
     const [bankFile, setBankFile] = useState<File | null>(null)
     const [ledgerFile, setLedgerFile] = useState<File | null>(null)
     const [instructions, setInstructions] = useState('')
     const [isProcessing, setIsProcessing] = useState(false)
+    const [progressSeconds, setProgressSeconds] = useState(0)
     const [status, setStatus] = useState<'idle' | 'processing' | 'success' | 'error'>('idle')
     const [errorMessage, setErrorMessage] = useState('')
     const [result, setResult] = useState<ReconciliationResult | null>(null)
@@ -256,9 +257,14 @@ export default function BankRecsPage() {
                 return
             }
 
-            // 1. Extract bank data (el servidor descuenta 1 crédito en esta llamada)
-            const { transactions: bankTransactions, credits } = await extractBankDataFromPDF(bankFile)
-            if (credits) setCredits(credits)
+            // 1. Extraer el extracto (corre en segundo plano; ~40-90s según el tamaño)
+            const { transactions: bankTransactions } = await extractBankDataFromPDF(
+                bankFile,
+                (segundos) => setProgressSeconds(segundos)
+            )
+            setProgressSeconds(0)
+            // El crédito se descuenta en el servidor: refrescar el saldo
+            refreshCredits()
 
             // 2. Parse ledger Excel file
             const ledgerTransactions = await parseLedgerExcel(ledgerFile)
@@ -561,7 +567,9 @@ export default function BankRecsPage() {
                         {isProcessing ? (
                             <>
                                 <Loader2 className="mr-2 h-5 w-5 animate-spin" />
-                                Procesando...
+                                {progressSeconds > 0
+                                    ? `Leyendo el extracto… ${progressSeconds}s`
+                                    : 'Procesando…'}
                             </>
                         ) : (
                             <>
@@ -572,7 +580,7 @@ export default function BankRecsPage() {
                     </Button>
                     <p className="text-sm text-slate-400 flex items-center gap-2">
                         <Loader2 className="w-4 h-4" />
-                        El proceso de análisis toma aproximadamente 15-30 segundos.
+                        El extracto se procesa en segundo plano: suele tomar entre 40 y 90 segundos.
                     </p>
                 </div>
 
