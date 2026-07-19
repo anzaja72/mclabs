@@ -21,7 +21,8 @@ import {
     X
 } from 'lucide-react'
 import * as XLSX from 'xlsx'
-import { extractBankDataFromPDF, reconcileBankWithAI, NeedsPurchaseError } from '@/lib/ai-service'
+import { extractBankDataFromPDF, reconcileBankWithAI, analizarConciliacion, NeedsPurchaseError } from '@/lib/ai-service'
+import type { AnalisisContable } from '@/lib/ai-service'
 import { useCredits } from '@/lib/credits-context'
 import { CreditsBanner } from '@/components/credits-banner'
 import { PaywallModal } from '@/components/paywall-modal'
@@ -75,6 +76,9 @@ export default function BankRecsPage() {
     const [status, setStatus] = useState<'idle' | 'processing' | 'success' | 'error'>('idle')
     const [errorMessage, setErrorMessage] = useState('')
     const [result, setResult] = useState<ReconciliationResult | null>(null)
+    const [analisis, setAnalisis] = useState<AnalisisContable | null>(null)
+    const [analizando, setAnalizando] = useState(false)
+    const [analisisSegundos, setAnalisisSegundos] = useState(0)
 
     const handleBankFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0]
@@ -247,6 +251,7 @@ export default function BankRecsPage() {
         setStatus('processing')
         setErrorMessage('')
         setResult(null)
+        setAnalisis(null)
 
         try {
             // 0. Check credits (validación rápida; el servidor valida y descuenta de forma definitiva)
@@ -288,6 +293,24 @@ export default function BankRecsPage() {
             setErrorMessage(error.message || 'Error durante el proceso de conciliación')
         } finally {
             setIsProcessing(false)
+        }
+    }
+
+    const handleAnalisisContable = async () => {
+        if (!result) return
+        setAnalizando(true)
+        setAnalisisSegundos(0)
+        try {
+            const a = await analizarConciliacion(
+                result.unmatchedBank,
+                result.unmatchedLedger,
+                (s) => setAnalisisSegundos(s)
+            )
+            setAnalisis(a)
+        } catch (e: any) {
+            setErrorMessage(e?.message || 'No se pudo generar el informe contable')
+        } finally {
+            setAnalizando(false)
         }
     }
 
@@ -666,6 +689,131 @@ export default function BankRecsPage() {
                                 </div>
                             </div>
                         )}
+
+                        {/* Informe contable (metodología colombiana) */}
+                        <div className="border-t border-slate-200 pt-6">
+                            {!analisis && (
+                                <div className="flex flex-col items-start gap-2">
+                                    <Button
+                                        onClick={handleAnalisisContable}
+                                        disabled={analizando}
+                                        className="bg-slate-900 hover:bg-slate-800 text-white flex items-center gap-2"
+                                    >
+                                        {analizando ? (
+                                            <><Loader2 className="w-4 h-4 animate-spin" />
+                                            Analizando… {analisisSegundos > 0 ? `${analisisSegundos}s` : ''}</>
+                                        ) : (
+                                            <><Sparkles className="w-4 h-4" />Generar informe contable</>
+                                        )}
+                                    </Button>
+                                    <p className="text-xs text-slate-500">
+                                        Clasifica las partidas sin cruzar (diferencias temporales vs. permanentes) y
+                                        propone los asientos contables con cuentas PUC.
+                                    </p>
+                                </div>
+                            )}
+
+                            {analisis && (
+                                <div className="space-y-6">
+                                    <h3 className="font-bold text-slate-900 text-lg">Informe contable</h3>
+
+                                    {analisis.resumen && (
+                                        <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl">
+                                            <p className="text-sm text-slate-700 leading-relaxed">{analisis.resumen}</p>
+                                        </div>
+                                    )}
+
+                                    {analisis.alertas?.length > 0 && (
+                                        <div className="space-y-2">
+                                            {analisis.alertas.map((a, i) => (
+                                                <div key={i} className="flex items-start gap-2 p-3 bg-amber-50 border border-amber-200 rounded-lg">
+                                                    <AlertCircle className="w-4 h-4 text-amber-600 flex-shrink-0 mt-0.5" />
+                                                    <p className="text-sm text-amber-900">{a}</p>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
+
+                                    {analisis.asientos?.length > 0 && (
+                                        <div>
+                                            <h4 className="font-semibold text-slate-900 mb-2">Asientos contables sugeridos</h4>
+                                            <div className="overflow-x-auto">
+                                                <table className="w-full text-sm">
+                                                    <thead>
+                                                        <tr className="text-left text-slate-500 border-b border-slate-200">
+                                                            <th className="py-2 pr-4 font-medium">Concepto</th>
+                                                            <th className="py-2 pr-4 font-medium">Débito</th>
+                                                            <th className="py-2 pr-4 font-medium">Crédito</th>
+                                                            <th className="py-2 font-medium text-right">Valor</th>
+                                                        </tr>
+                                                    </thead>
+                                                    <tbody>
+                                                        {analisis.asientos.filter(a => a?.valor).map((a, i) => (
+                                                            <tr key={i} className="border-b border-slate-100">
+                                                                <td className="py-2 pr-4 text-slate-800">{a.concepto || '—'}</td>
+                                                                <td className="py-2 pr-4 text-slate-600">{a.debito?.cuenta} {a.debito?.nombre}</td>
+                                                                <td className="py-2 pr-4 text-slate-600">{a.credito?.cuenta} {a.credito?.nombre}</td>
+                                                                <td className="py-2 text-right font-semibold text-slate-900 whitespace-nowrap">
+                                                                    ${Math.abs(Number(a.valor)).toLocaleString('es-CO')}
+                                                                </td>
+                                                            </tr>
+                                                        ))}
+                                                    </tbody>
+                                                </table>
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    {analisis.clasificacion?.length > 0 && (
+                                        <div>
+                                            <h4 className="font-semibold text-slate-900 mb-2">
+                                                Clasificación de partidas sin cruzar
+                                            </h4>
+                                            <div className="overflow-x-auto max-h-80 overflow-y-auto">
+                                                <table className="w-full text-sm">
+                                                    <thead className="sticky top-0 bg-white">
+                                                        <tr className="text-left text-slate-500 border-b border-slate-200">
+                                                            <th className="py-2 pr-4 font-medium">Concepto</th>
+                                                            <th className="py-2 pr-4 font-medium">Origen</th>
+                                                            <th className="py-2 pr-4 font-medium">Naturaleza</th>
+                                                            <th className="py-2 font-medium text-right">Valor</th>
+                                                        </tr>
+                                                    </thead>
+                                                    <tbody>
+                                                        {analisis.clasificacion.map((c, i) => (
+                                                            <tr key={i} className="border-b border-slate-100">
+                                                                <td className="py-2 pr-4">
+                                                                    <span className="text-slate-800">{c.concepto}</span>
+                                                                    {c.cantidad > 1 && (
+                                                                        <span className="text-slate-400"> ×{c.cantidad}</span>
+                                                                    )}
+                                                                    <p className="text-xs text-slate-500">{c.explicacion}</p>
+                                                                </td>
+                                                                <td className="py-2 pr-4 text-slate-600">
+                                                                    {c.origen === 'banco' ? 'Extracto' : 'Libros'}
+                                                                </td>
+                                                                <td className="py-2 pr-4">
+                                                                    <span className={`text-xs font-semibold px-2 py-1 rounded-full ${
+                                                                        c.naturaleza === 'permanente'
+                                                                            ? 'bg-red-100 text-red-700'
+                                                                            : 'bg-blue-100 text-blue-700'
+                                                                    }`}>
+                                                                        {c.naturaleza === 'permanente' ? 'Requiere ajuste' : 'Temporal'}
+                                                                    </span>
+                                                                </td>
+                                                                <td className="py-2 text-right text-slate-900 whitespace-nowrap">
+                                                                    ${Math.abs(Number(c.valor || 0)).toLocaleString('es-CO')}
+                                                                </td>
+                                                            </tr>
+                                                        ))}
+                                                    </tbody>
+                                                </table>
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+                        </div>
 
                         <Button variant="outline" onClick={handleExportReport} className="flex items-center gap-2">
                             <Download className="w-4 h-4" />
