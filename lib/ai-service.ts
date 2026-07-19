@@ -206,6 +206,60 @@ export const analizarConciliacion = async (
     throw new Error('El análisis contable tardó demasiado.');
 };
 
+export interface AnalisisEstados {
+    diagnostico: string;
+    alertas: string[];
+    fortalezas: string[];
+    recomendaciones: { titulo: string; detalle: string }[];
+    notas: { titulo: string; contenido: string }[];
+    interpretacionRatios: { ratio: string; valor: string; interpretacion: string }[];
+}
+
+/**
+ * Análisis IA de los estados financieros (los estados se construyen
+ * determinísticamente en el cliente; esto agrega el diagnóstico profesional).
+ * Corre en segundo plano y cobra el crédito de tableros en el servidor.
+ */
+export const analizarEstadosFinancieros = async (
+    resumen: string,
+    onProgress?: (segundos: number) => void
+): Promise<AnalisisEstados> => {
+    const token = await getAccessToken();
+    const jobId = crypto.randomUUID();
+
+    const res = await fetch('/.netlify/functions/analizar-estados-background', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ jobId, resumen }),
+    });
+    if (res.status !== 202 && !res.ok) throw new Error('No se pudo iniciar el análisis financiero.');
+
+    const inicio = Date.now();
+    while (Date.now() - inicio < 5 * 60 * 1000) {
+        await new Promise(r => setTimeout(r, 2500));
+        onProgress?.(Math.round((Date.now() - inicio) / 1000));
+        const { data } = await supabase
+            .from('ai_jobs').select('estado, resultado, error').eq('id', jobId).maybeSingle();
+        if (!data) continue;
+        if (data.estado === 'listo') {
+            const r = (data.resultado || {}) as Partial<AnalisisEstados>;
+            return {
+                diagnostico: r.diagnostico || '',
+                alertas: r.alertas || [],
+                fortalezas: r.fortalezas || [],
+                recomendaciones: r.recomendaciones || [],
+                notas: r.notas || [],
+                interpretacionRatios: r.interpretacionRatios || [],
+            };
+        }
+        if (data.estado === 'error') {
+            if (data.error === 'SIN_CREDITOS') throw new NeedsPurchaseError();
+            throw new Error(data.error || 'Error en el análisis financiero.');
+        }
+    }
+    throw new Error('El análisis financiero tardó demasiado.');
+};
+
 export interface AIReconcileResult {
     matched: { bank: number[]; ledger: number[]; note?: string }[];
     unmatchedBank: number[];
