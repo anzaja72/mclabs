@@ -87,7 +87,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
 
     const signOut = async () => {
-        await supabase.auth.signOut()
+        // 'local' limpia la sesión del navegador aunque el servidor ya la haya
+        // revocado (p. ej. tras un cambio de contraseña); sin esto, signOut
+        // lanza error y el usuario queda atrapado sin poder salir.
+        try {
+            await supabase.auth.signOut({ scope: 'local' })
+        } catch {
+            // la sesión ya no existía en el servidor: continuar igual
+        }
+        if (typeof window !== 'undefined') window.location.href = '/login'
     }
 
     return (

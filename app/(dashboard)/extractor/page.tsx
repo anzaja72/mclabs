@@ -198,6 +198,12 @@ export default function ExtractorPage() {
                                 Bancario
                             </Link>
                             <Link
+                                href="/dashboards"
+                                className="px-4 py-2 text-sm font-medium text-slate-600 hover:text-slate-900 rounded-lg hover:bg-slate-100 transition-colors"
+                            >
+                                Tableros
+                            </Link>
+                            <Link
                                 href="/extractor"
                                 className="px-4 py-2 text-sm font-medium text-[#009FE3] bg-blue-50 rounded-lg"
                             >

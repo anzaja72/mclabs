@@ -38,6 +38,12 @@ export function CreditsProvider({ children }: { children: ReactNode }) {
             if (res.ok) {
                 const data = await res.json();
                 setCredits(data);
+            } else if (res.status === 401) {
+                // Sesión revocada (p. ej. cambio de contraseña): sin esto la UI
+                // muestra "0 créditos" engañosamente. Salir para reautenticar.
+                const { supabase } = await import('@/lib/supabase/client');
+                await supabase.auth.signOut({ scope: 'local' }).catch(() => {});
+                if (typeof window !== 'undefined') window.location.href = '/login';
             }
         } catch (err) {
             console.error('Error fetching credits:', err);
