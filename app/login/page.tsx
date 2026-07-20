@@ -5,9 +5,7 @@ import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import Image from 'next/image'
 import { useAuth } from '@/lib/auth-context'
-import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
-import { Loader2, Mail, Lock, ArrowRight, Phone, User, MapPin, Building2, Briefcase, Eye, EyeOff } from 'lucide-react'
+import { Loader2, LogIn, Eye, EyeOff } from 'lucide-react'
 
 export default function LoginPage() {
     const [email, setEmail] = useState('')
@@ -45,7 +43,6 @@ export default function LoginPage() {
                 if (error) {
                     setError(error.message)
                 } else {
-                    // Registrar en la hoja de usuarios (no bloquea el alta si falla)
                     fetch('/api/registro', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
@@ -82,157 +79,135 @@ export default function LoginPage() {
         else setMessage('Si el correo existe, te enviamos un enlace para restablecer tu contraseña.')
     }
 
-    const inputCls = "w-full pl-11 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all text-slate-900"
+    const inputCls = "w-full px-4 py-3 bg-white border border-slate-300 rounded-2xl focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all text-slate-900 placeholder:text-slate-400"
 
     return (
-        <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 p-4">
-            <div className="absolute inset-0 overflow-hidden">
-                <div className="absolute -top-40 -right-40 w-80 h-80 bg-blue-500/20 rounded-full blur-3xl"></div>
-                <div className="absolute -bottom-40 -left-40 w-80 h-80 bg-purple-500/20 rounded-full blur-3xl"></div>
-            </div>
+        <div className="min-h-screen flex flex-col items-center justify-center bg-gradient-to-br from-slate-100 via-blue-50/40 to-slate-50 p-4">
+            <div className="w-full max-w-xl bg-white rounded-3xl shadow-xl shadow-slate-200/60 border border-slate-100 px-8 py-10 md:px-14">
+                {/* Logo grande */}
+                <div className="mx-auto mb-4 w-56 h-32 relative">
+                    <Image src="/mc-labs-logo.png" alt="MC Consultorías y Capacitación" fill sizes="224px" className="object-contain" priority />
+                </div>
+                <hr className="border-slate-200 mb-8" />
 
-            <Card className="w-full max-w-md relative z-10 bg-white/95 backdrop-blur-xl shadow-2xl border-0 my-8">
-                <CardHeader className="text-center pb-2">
-                    <div className="mx-auto mb-4 w-24 h-24 relative">
-                        <Image src="/mc-labs-logo.png" alt="MC Labs Logo" fill sizes="96px" className="object-contain" priority />
+                <h1 className="text-3xl font-bold text-slate-900 text-center">
+                    {isSignUp ? 'Crea tu cuenta' : 'Inicia sesión'}
+                </h1>
+                <p className="mt-3 text-center text-slate-500 leading-relaxed max-w-md mx-auto">
+                    MC Labs · Suite contable con IA. Conciliaciones, tableros financieros,
+                    extracción de facturas y declaración de renta en un solo lugar.
+                </p>
+
+                <form onSubmit={handleSubmit} className="mt-8 space-y-5">
+                    {isSignUp && (
+                        <div>
+                            <label className="block font-semibold text-slate-800 mb-2">Nombre completo</label>
+                            <input type="text" value={nombre} onChange={(e) => setNombre(e.target.value)}
+                                placeholder="Nombre y apellido" required className={inputCls} />
+                        </div>
+                    )}
+
+                    <div>
+                        <label className="block font-semibold text-slate-800 mb-2">Correo electrónico</label>
+                        <input type="email" value={email} onChange={(e) => setEmail(e.target.value)}
+                            placeholder="tucorreo@ejemplo.com" required className={inputCls} />
                     </div>
-                    <CardTitle className="text-2xl font-black text-slate-900">MC Labs</CardTitle>
-                    <CardDescription className="text-slate-500">
-                        {isSignUp ? 'Crea tu cuenta para comenzar' : 'Bienvenido de vuelta'}
-                    </CardDescription>
-                </CardHeader>
-                <CardContent>
-                    <form onSubmit={handleSubmit} className="space-y-4">
-                        {isSignUp && (
-                            <div className="space-y-2">
-                                <label className="text-sm font-medium text-slate-700">Nombre completo</label>
-                                <div className="relative">
-                                    <User className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
-                                    <input type="text" value={nombre} onChange={(e) => setNombre(e.target.value)}
-                                        placeholder="Nombre y apellido" required className={inputCls} />
-                                </div>
-                            </div>
-                        )}
 
-                        <div className="space-y-2">
-                            <label className="text-sm font-medium text-slate-700">Correo electrónico</label>
-                            <div className="relative">
-                                <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
-                                <input type="email" value={email} onChange={(e) => setEmail(e.target.value)}
-                                    placeholder="tu@email.com" required className={inputCls} />
-                            </div>
-                        </div>
-
-                        <div className="space-y-2">
-                            <label className="text-sm font-medium text-slate-700">Contraseña</label>
-                            <div className="relative">
-                                <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
-                                <input type={showPassword ? 'text' : 'password'} value={password}
-                                    onChange={(e) => setPassword(e.target.value)} placeholder="••••••••" required minLength={6}
-                                    className={inputCls + ' pr-11'} />
-                                <button type="button" onClick={() => setShowPassword(!showPassword)}
-                                    aria-label={showPassword ? 'Ocultar contraseña' : 'Mostrar contraseña'}
-                                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 transition-colors">
-                                    {showPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
-                                </button>
-                            </div>
-                        </div>
-
-                        {isSignUp && (
-                            <>
-                                <div className="grid grid-cols-2 gap-3">
-                                    <div className="space-y-2">
-                                        <label className="text-sm font-medium text-slate-700">Teléfono</label>
-                                        <div className="relative">
-                                            <Phone className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
-                                            <input type="tel" value={telefono} onChange={(e) => setTelefono(e.target.value)}
-                                                placeholder="+57 300…" required className={inputCls} />
-                                        </div>
-                                    </div>
-                                    <div className="space-y-2">
-                                        <label className="text-sm font-medium text-slate-700">Ciudad</label>
-                                        <div className="relative">
-                                            <MapPin className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
-                                            <input type="text" value={ciudad} onChange={(e) => setCiudad(e.target.value)}
-                                                placeholder="Ciudad" required className={inputCls} />
-                                        </div>
-                                    </div>
-                                </div>
-                                <div className="grid grid-cols-2 gap-3">
-                                    <div className="space-y-2">
-                                        <label className="text-sm font-medium text-slate-700">Empresa</label>
-                                        <div className="relative">
-                                            <Building2 className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
-                                            <input type="text" value={empresa} onChange={(e) => setEmpresa(e.target.value)}
-                                                placeholder="Empresa" required className={inputCls} />
-                                        </div>
-                                    </div>
-                                    <div className="space-y-2">
-                                        <label className="text-sm font-medium text-slate-700">Cargo</label>
-                                        <div className="relative">
-                                            <Briefcase className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
-                                            <input type="text" value={cargo} onChange={(e) => setCargo(e.target.value)}
-                                                placeholder="Cargo" required className={inputCls} />
-                                        </div>
-                                    </div>
-                                </div>
-
-                                <label className="flex items-start gap-2 text-xs text-slate-600 cursor-pointer">
-                                    <input type="checkbox" checked={aceptaDatos} onChange={(e) => setAceptaDatos(e.target.checked)}
-                                        className="mt-0.5 h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500" />
-                                    <span>
-                                        Autorizo el tratamiento de mis datos personales conforme a la{' '}
-                                        <Link href="/legal/tratamiento-de-datos" target="_blank" className="text-blue-600 font-medium hover:underline">
-                                            Política de Tratamiento de Datos
-                                        </Link>{' '}
-                                        (Ley 1581 de 2012).
-                                    </span>
-                                </label>
-                            </>
-                        )}
-
-                        {error && <div className="p-3 bg-red-50 border border-red-100 rounded-xl text-red-600 text-sm">{error}</div>}
-                        {message && <div className="p-3 bg-green-50 border border-green-100 rounded-xl text-green-600 text-sm">{message}</div>}
-
-                        <Button type="submit" disabled={loading}
-                            className="w-full py-6 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white font-bold rounded-xl shadow-lg shadow-blue-500/25 transition-all">
-                            {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : (
-                                <>{isSignUp ? 'Crear Cuenta' : 'Iniciar Sesión'}<ArrowRight className="w-5 h-5 ml-2" /></>
-                            )}
-                        </Button>
-                    </form>
-
-                    {!isSignUp && (
-                        <div className="mt-4 text-center">
-                            <button type="button" onClick={handleReset}
-                                className="text-sm text-slate-500 hover:text-blue-600 transition-colors">
-                                ¿Olvidaste tu contraseña?
+                    <div>
+                        <label className="block font-semibold text-slate-800 mb-2">Contraseña</label>
+                        <div className="relative">
+                            <input type={showPassword ? 'text' : 'password'} value={password}
+                                onChange={(e) => setPassword(e.target.value)} placeholder="Mínimo 6 caracteres"
+                                required minLength={6} className={inputCls + ' pr-12'} />
+                            <button type="button" onClick={() => setShowPassword(!showPassword)}
+                                aria-label={showPassword ? 'Ocultar contraseña' : 'Mostrar contraseña'}
+                                className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 transition-colors">
+                                {showPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
                             </button>
                         </div>
-                    )}
-
-                    <div className="mt-4 text-center">
-                        <button type="button"
-                            onClick={() => { setIsSignUp(!isSignUp); setError(null); setMessage(null) }}
-                            className="text-sm text-slate-500 hover:text-blue-600 transition-colors">
-                            {isSignUp ? (
-                                <>¿Ya tienes cuenta? <span className="font-semibold">Inicia sesión</span></>
-                            ) : (
-                                <>¿No tienes cuenta? <span className="font-semibold">Regístrate</span></>
-                            )}
-                        </button>
                     </div>
 
-                    {!isSignUp && (
-                        <p className="mt-6 text-center text-[11px] leading-relaxed text-slate-400">
-                            Al continuar aceptas el tratamiento de tus datos conforme a la{' '}
-                            <Link href="/legal/tratamiento-de-datos" target="_blank" className="text-slate-500 hover:underline">
-                                Política de Tratamiento de Datos
-                            </Link>.
-                        </p>
+                    {isSignUp && (
+                        <>
+                            <div className="grid grid-cols-2 gap-4">
+                                <div>
+                                    <label className="block font-semibold text-slate-800 mb-2">Teléfono</label>
+                                    <input type="tel" value={telefono} onChange={(e) => setTelefono(e.target.value)}
+                                        placeholder="+57 300…" required className={inputCls} />
+                                </div>
+                                <div>
+                                    <label className="block font-semibold text-slate-800 mb-2">Ciudad</label>
+                                    <input type="text" value={ciudad} onChange={(e) => setCiudad(e.target.value)}
+                                        placeholder="Ciudad" required className={inputCls} />
+                                </div>
+                            </div>
+                            <div className="grid grid-cols-2 gap-4">
+                                <div>
+                                    <label className="block font-semibold text-slate-800 mb-2">Empresa</label>
+                                    <input type="text" value={empresa} onChange={(e) => setEmpresa(e.target.value)}
+                                        placeholder="Empresa" required className={inputCls} />
+                                </div>
+                                <div>
+                                    <label className="block font-semibold text-slate-800 mb-2">Cargo</label>
+                                    <input type="text" value={cargo} onChange={(e) => setCargo(e.target.value)}
+                                        placeholder="Cargo" required className={inputCls} />
+                                </div>
+                            </div>
+
+                            <label className="flex items-start gap-3 text-sm text-slate-600 cursor-pointer">
+                                <input type="checkbox" checked={aceptaDatos} onChange={(e) => setAceptaDatos(e.target.checked)}
+                                    className="mt-0.5 h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500" />
+                                <span>
+                                    Autorizo el tratamiento de mis datos personales conforme a la{' '}
+                                    <Link href="/legal/tratamiento-de-datos" target="_blank" className="text-blue-600 font-medium hover:underline">
+                                        Política de Tratamiento de Datos
+                                    </Link>{' '}
+                                    (Ley 1581 de 2012).
+                                </span>
+                            </label>
+                        </>
                     )}
-                </CardContent>
-            </Card>
+
+                    {error && <div className="p-3 bg-red-50 border border-red-100 rounded-xl text-red-600 text-sm">{error}</div>}
+                    {message && <div className="p-3 bg-green-50 border border-green-100 rounded-xl text-green-600 text-sm">{message}</div>}
+
+                    <button type="submit" disabled={loading}
+                        className="w-full py-4 bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white text-lg font-semibold rounded-2xl transition-colors flex items-center justify-center gap-3">
+                        {loading ? <Loader2 className="w-6 h-6 animate-spin" /> : (
+                            <><LogIn className="w-6 h-6" />{isSignUp ? 'Crear cuenta' : 'Entrar'}</>
+                        )}
+                    </button>
+                </form>
+
+                {!isSignUp && (
+                    <div className="mt-5 text-center">
+                        <button type="button" onClick={handleReset}
+                            className="text-sm text-slate-500 hover:text-blue-600 transition-colors">
+                            ¿Olvidaste tu contraseña?
+                        </button>
+                    </div>
+                )}
+
+                <p className="mt-5 text-center text-slate-600">
+                    {isSignUp ? '¿Ya tienes cuenta?' : '¿No tienes cuenta?'}{' '}
+                    <button type="button"
+                        onClick={() => { setIsSignUp(!isSignUp); setError(null); setMessage(null) }}
+                        className="text-blue-600 font-semibold underline underline-offset-2 hover:text-blue-700">
+                        {isSignUp ? 'Inicia sesión' : 'Regístrate'}
+                    </button>
+                </p>
+
+                {!isSignUp && (
+                    <p className="mt-6 text-center text-xs leading-relaxed text-slate-400">
+                        Al continuar aceptas el tratamiento de tus datos conforme a la{' '}
+                        <Link href="/legal/tratamiento-de-datos" target="_blank" className="text-slate-500 hover:underline">
+                            Política de Tratamiento de Datos
+                        </Link>.
+                    </p>
+                )}
+            </div>
+
+            <p className="mt-6 text-sm text-slate-400">© 2026 MC Consultorías y Capacitación</p>
         </div>
     )
 }

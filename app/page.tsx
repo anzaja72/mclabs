@@ -49,7 +49,7 @@ const MODULES = [
 ]
 
 function Home() {
-  const { user, signOut, loading: authLoading } = useAuth()
+  const { user, session, signOut, loading: authLoading } = useAuth()
   const { credits, refreshCredits } = useCredits()
   const searchParams = useSearchParams()
   const router = useRouter()
@@ -91,6 +91,14 @@ function Home() {
   , [dark])
 
   const saldo = credits?.saldo ?? 0
+
+  // SSO hacia renta.mcconsultorias.com.co: la sesión viaja en el hash del
+  // enlace (nunca llega al servidor) y la app de Renta la aplica al abrir,
+  // así el usuario no tiene que autenticarse dos veces.
+  const rentaBase = 'https://renta.mcconsultorias.com.co/'
+  const rentaUrl = session?.access_token && session?.refresh_token
+    ? `${rentaBase}#sso_at=${encodeURIComponent(session.access_token)}&sso_rt=${encodeURIComponent(session.refresh_token)}`
+    : rentaBase
 
   return (
     <div style={{ minHeight: '100vh', background: t.bg, color: t.fg, fontFamily: "'Manrope', system-ui, sans-serif" }}>
@@ -161,7 +169,7 @@ function Home() {
               transition: 'transform .18s ease, border-color .18s ease, box-shadow .18s ease', color: t.fg,
             }
             return m.external ? (
-              <a key={m.n} href={m.href} target="_blank" rel="noopener noreferrer" style={cardStyle} className="mc-card">{inner}</a>
+              <a key={m.n} href={rentaUrl} target="_blank" rel="noopener noreferrer" style={cardStyle} className="mc-card">{inner}</a>
             ) : (
               <a key={m.n} href={m.href} style={cardStyle} className="mc-card">{inner}</a>
             )
