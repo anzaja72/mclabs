@@ -6,7 +6,7 @@ import Image from 'next/image';
 import { useAuth } from '@/lib/auth-context';
 import {
     FileUp, Settings, Trash2, Download, Plus, X, Pencil, CheckCircle,
-    AlertCircle, Loader2, TrendingUp, Layers, Search, LayoutGrid, List, FileText, User
+    AlertCircle, Loader2, TrendingUp, Layers, Search, LayoutGrid, List, FileText, User, AlertTriangle, X as XIcon
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 
@@ -24,6 +24,7 @@ export default function ExtractorPage() {
     const { user } = useAuth();
     const { getToolCredits, setCredits } = useCredits();
     const [showPaywall, setShowPaywall] = useState(false);
+    const [fallos, setFallos] = useState<{ archivo: string; motivo: string }[]>([]);
     const [invoices, setInvoices] = useState<InvoiceData[]>([]);
     const [processingStatus, setProcessingStatus] = useState<ProcessingStatus>(ProcessingStatus.IDLE);
     const [processingMessage, setProcessingMessage] = useState<string>('');
@@ -53,6 +54,7 @@ export default function ExtractorPage() {
         if (!files || files.length === 0) return;
 
         setProcessingStatus(ProcessingStatus.LOADING);
+        setFallos([]);
         const filesArray = Array.from(files);
         let successCount = 0;
         let failCount = 0;
@@ -70,15 +72,29 @@ export default function ExtractorPage() {
             setProcessingMessage(`Procesando (${i + 1}/${filesArray.length}): ${file.name}`);
 
             try {
+                // Fotos HEIC de iPhone: los modelos de visión no las aceptan;
+                // se convierten a JPEG en el navegador antes de enviar.
+                let archivo: File = file;
+                const esHeic = /\.hei[cf]$/i.test(file.name) || file.type === 'image/heic' || file.type === 'image/heif';
+                if (esHeic) {
+                    try {
+                        const heic2any = (await import('heic2any')).default;
+                        const blob = await heic2any({ blob: file, toType: 'image/jpeg', quality: 0.9 }) as Blob;
+                        archivo = new File([blob], file.name.replace(/\.hei[cf]$/i, '.jpg'), { type: 'image/jpeg' });
+                    } catch {
+                        throw new Error('No se pudo convertir la foto HEIC de iPhone. Exporta la imagen como JPG y vuelve a intentarlo.');
+                    }
+                }
+
                 const base64 = await new Promise<string>((resolve, reject) => {
                     const reader = new FileReader();
-                    reader.readAsDataURL(file);
+                    reader.readAsDataURL(archivo);
                     reader.onload = () => resolve((reader.result as string).split(',')[1]);
                     reader.onerror = reject;
                 });
 
                 // El servidor descuenta 1 crédito por extracción exitosa
-                const { invoice, credits } = await extractInvoiceData(base64, file.type, file.name);
+                const { invoice, credits } = await extractInvoiceData(base64, archivo.type || 'application/pdf', file.name);
                 setInvoices(prev => [invoice, ...prev]);
                 if (credits) setCredits(credits);
                 successCount++;
@@ -88,6 +104,8 @@ export default function ExtractorPage() {
                     break;
                 }
                 console.error(`Error processing ${file.name}`, error);
+                const motivo = error instanceof Error ? error.message : 'Error desconocido al procesar el archivo';
+                setFallos(prev => [...prev, { archivo: file.name, motivo }]);
                 failCount++;
             }
         }
@@ -119,14 +137,33 @@ export default function ExtractorPage() {
     const downloadExcel = () => {
         if (invoices.length === 0) return;
 
+        // Exporte completo: TODA la información de la factura (incluido el CUFE)
+        // con una fila por ítem para poder discriminar el impuesto de cada uno.
         const flatData = invoices.flatMap(inv => {
             const base = {
                 "Archivo": inv.fileName,
                 "Emisor": inv.issuerInfo?.companyName,
                 "NIT Emisor": inv.issuerInfo?.nit,
+                "Dirección Emisor": inv.issuerInfo?.address || '',
+                "Ciudad Emisor": inv.issuerInfo?.city || '',
+                "Teléfono Emisor": inv.issuerInfo?.phone || '',
                 "Cliente": inv.customerInfo?.name,
+                "NIT/CC Cliente": inv.customerInfo?.idNumber || '',
+                "Ciudad Cliente": inv.customerInfo?.city || '',
+                "Email Cliente": inv.customerInfo?.email || '',
                 "Nº Factura": inv.generalInfo?.invoiceNumber,
+                "CUFE": inv.generalInfo?.cufe || '',
                 "Fecha": inv.generalInfo?.issueDate,
+                "Vencimiento": inv.generalInfo?.dueDate || '',
+                "Forma de Pago": inv.generalInfo?.paymentMethod || '',
+                "Moneda": inv.generalInfo?.currency || 'COP',
+                "Subtotal": inv.totals?.subtotal ?? '',
+                "Descuentos": inv.totals?.discounts ?? '',
+                "IVA": inv.totals?.iva ?? '',
+                "INC": inv.totals?.inc ?? '',
+                "ReteFuente": inv.totals?.reteFuente ?? '',
+                "ReteIVA": inv.totals?.reteIva ?? '',
+                "ReteICA": inv.totals?.reteIca ?? '',
                 "Total Factura": inv.totals?.grandTotal,
                 "Procesado": new Date(inv.processedAt).toLocaleString()
             };
@@ -137,6 +174,9 @@ export default function ExtractorPage() {
                     "Item": item.description,
                     "Cant": item.quantity,
                     "Precio Uni": item.unitPrice,
+                    "Descuento Item": item.discount ?? '',
+                    "Tarifa IVA % Item": item.taxRate ?? '',
+                    "IVA Item": item.taxValue ?? '',
                     "Total Item": item.totalValue
                 }));
             }
@@ -223,8 +263,44 @@ export default function ExtractorPage() {
 
             <div className="max-w-7xl mx-auto p-6 space-y-8">
 
+                {/* Encabezado de página (consistente con las demás herramientas) */}
+                <div>
+                    <div className="flex items-center gap-2 text-[#009FE3] text-sm font-semibold mb-2">
+                        <FileText className="w-4 h-4" />
+                        EXTRACCIÓN INTELIGENTE DE DOCUMENTOS
+                    </div>
+                    <h1 className="text-3xl font-bold text-slate-900">Extractor de Facturas con IA</h1>
+                    <p className="text-slate-500 mt-2 max-w-2xl">
+                        Digitaliza facturas en PDF o imagen: la IA extrae emisor, cliente, CUFE, ítems,
+                        impuestos y totales, listos para revisar y exportar a Excel.
+                    </p>
+                </div>
+
                 {/* Credits Banner */}
                 <CreditsBanner tool="extractor" toolLabel="Extractor IA" />
+
+                {/* Archivos que no se pudieron procesar (persistente hasta el próximo lote) */}
+                {fallos.length > 0 && (
+                    <div className="p-4 bg-amber-50 border border-amber-200 rounded-2xl">
+                        <div className="flex items-start justify-between gap-3">
+                            <div className="flex items-start gap-2">
+                                <AlertTriangle className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
+                                <div>
+                                    <p className="font-semibold text-amber-900">
+                                        {fallos.length} archivo{fallos.length > 1 ? 's' : ''} no se pudo{fallos.length > 1 ? 'ieron' : ''} procesar
+                                    </p>
+                                    <ul className="mt-2 space-y-1 text-sm text-amber-800">
+                                        {fallos.map((f, i) => (
+                                            <li key={i}><span className="font-medium">{f.archivo}:</span> {f.motivo}</li>
+                                        ))}
+                                    </ul>
+                                    <p className="mt-2 text-xs text-amber-700">El crédito de los archivos fallidos se devuelve automáticamente.</p>
+                                </div>
+                            </div>
+                            <button onClick={() => setFallos([])} className="text-amber-500 hover:text-amber-700"><XIcon className="w-4 h-4" /></button>
+                        </div>
+                    </div>
+                )}
 
                 {/* Paywall Modal */}
                 {showPaywall && (
@@ -262,7 +338,7 @@ export default function ExtractorPage() {
                         <label className="relative z-10 bg-white/20 hover:bg-white/30 backdrop-blur-md px-4 py-2 rounded-xl text-sm font-bold cursor-pointer transition-all flex items-center gap-2 border border-white/20">
                             <Plus className="w-4 h-4" />
                             Subir Archivos
-                            <input type="file" multiple accept="application/pdf,image/*" className="hidden" onChange={handleFileUpload} />
+                            <input type="file" multiple accept="application/pdf,image/*,.heic,.heif" className="hidden" onChange={handleFileUpload} />
                         </label>
                         <div className="absolute -right-4 -bottom-4 opacity-10">
                             <FileUp className="w-32 h-32" />
@@ -349,50 +425,42 @@ export default function ExtractorPage() {
                             </div>
                         ) : viewMode === 'table' ? (
                             <div className="overflow-x-auto">
-                                <table className="w-full text-left border-collapse">
+                                <table className="w-full text-left border-collapse text-xs">
                                     <thead>
-                                        <tr className="bg-slate-50/50 text-slate-500 text-[11px] font-bold uppercase tracking-wider">
-                                            <th className="px-6 py-3 border-b border-slate-100">Emisor</th>
-                                            <th className="px-6 py-3 border-b border-slate-100">Número</th>
-                                            <th className="px-6 py-3 border-b border-slate-100">Fecha</th>
-                                            <th className="px-6 py-3 border-b border-slate-100 text-right">Total</th>
-                                            <th className="px-6 py-3 border-b border-slate-100 text-center">Acciones</th>
+                                        <tr className="bg-slate-50/50 text-slate-500 text-[10px] font-bold uppercase tracking-wider">
+                                            {['Archivo', 'Emisor', 'NIT Emisor', 'Cliente', 'Nº Factura', 'Fecha', 'Total Factura', 'Procesado', 'Item', 'Cant', 'Precio Uni', 'Total Item', ''].map(h => (
+                                                <th key={h} className="px-3 py-3 border-b border-slate-100 whitespace-nowrap">{h}</th>
+                                            ))}
                                         </tr>
                                     </thead>
                                     <tbody className="divide-y divide-slate-100">
-                                        {filteredInvoices.map((inv) => (
-                                            <tr key={inv.id} className="group hover:bg-slate-50/80 transition-colors">
-                                                <td className="px-6 py-4">
-                                                    <p className="font-bold text-slate-900 truncate max-w-[200px]">{inv.issuerInfo?.companyName || 'N/A'}</p>
-                                                    <p className="text-xs text-slate-400">{inv.fileName}</p>
-                                                </td>
-                                                <td className="px-6 py-4">
-                                                    <span className="px-2 py-1 bg-slate-100 rounded text-slate-600 text-xs font-bold">
-                                                        #{inv.generalInfo?.invoiceNumber || 'S/N'}
-                                                    </span>
-                                                </td>
-                                                <td className="px-6 py-4 text-sm text-slate-600">{inv.generalInfo?.issueDate || '-'}</td>
-                                                <td className="px-6 py-4 text-right">
-                                                    <span className="font-bold text-slate-900">{formatCurrency(inv.totals?.grandTotal || 0)}</span>
-                                                </td>
-                                                <td className="px-6 py-4">
-                                                    <div className="flex items-center justify-center gap-2">
-                                                        <button
-                                                            onClick={() => setEditingInvoice(inv)}
-                                                            className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-all"
-                                                        >
-                                                            <Pencil className="w-4 h-4" />
-                                                        </button>
-                                                        <button
-                                                            onClick={() => deleteInvoice(inv.id)}
-                                                            className="p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-all"
-                                                        >
-                                                            <Trash2 className="w-4 h-4" />
-                                                        </button>
-                                                    </div>
-                                                </td>
-                                            </tr>
-                                        ))}
+                                        {filteredInvoices.flatMap((inv) => {
+                                            const items: (LineItem | null)[] = inv.lineItems && inv.lineItems.length > 0 ? inv.lineItems : [null]
+                                            return items.map((item, idx) => (
+                                                <tr key={`${inv.id}-${idx}`} className={`group hover:bg-slate-50/80 transition-colors ${idx > 0 ? 'text-slate-400' : ''}`}>
+                                                    <td className="px-3 py-2 max-w-[130px] truncate" title={inv.fileName}>{idx === 0 ? inv.fileName : '〃'}</td>
+                                                    <td className="px-3 py-2 max-w-[160px] truncate font-semibold text-slate-800" title={inv.issuerInfo?.companyName}>{idx === 0 ? (inv.issuerInfo?.companyName || 'N/A') : '〃'}</td>
+                                                    <td className="px-3 py-2 whitespace-nowrap">{idx === 0 ? (inv.issuerInfo?.nit || '-') : '〃'}</td>
+                                                    <td className="px-3 py-2 max-w-[140px] truncate" title={inv.customerInfo?.name}>{idx === 0 ? (inv.customerInfo?.name || '-') : '〃'}</td>
+                                                    <td className="px-3 py-2 whitespace-nowrap font-bold text-slate-700">{idx === 0 ? (inv.generalInfo?.invoiceNumber || 'S/N') : '〃'}</td>
+                                                    <td className="px-3 py-2 whitespace-nowrap">{idx === 0 ? (inv.generalInfo?.issueDate || '-') : '〃'}</td>
+                                                    <td className="px-3 py-2 whitespace-nowrap font-bold text-slate-900 text-right">{idx === 0 ? formatCurrency(inv.totals?.grandTotal || 0) : '〃'}</td>
+                                                    <td className="px-3 py-2 whitespace-nowrap">{idx === 0 ? new Date(inv.processedAt).toLocaleDateString('es-CO') : '〃'}</td>
+                                                    <td className="px-3 py-2 max-w-[220px] truncate text-slate-700" title={item?.description}>{item?.description || '-'}</td>
+                                                    <td className="px-3 py-2 text-right">{item?.quantity ?? '-'}</td>
+                                                    <td className="px-3 py-2 text-right whitespace-nowrap">{item ? formatCurrency(item.unitPrice || 0) : '-'}</td>
+                                                    <td className="px-3 py-2 text-right whitespace-nowrap font-semibold text-slate-800">{item ? formatCurrency(item.totalValue || 0) : '-'}</td>
+                                                    <td className="px-3 py-2">
+                                                        {idx === 0 && (
+                                                            <div className="flex items-center gap-1">
+                                                                <button onClick={() => setEditingInvoice(inv)} className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-all"><Pencil className="w-4 h-4" /></button>
+                                                                <button onClick={() => deleteInvoice(inv.id)} className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-all"><Trash2 className="w-4 h-4" /></button>
+                                                            </div>
+                                                        )}
+                                                    </td>
+                                                </tr>
+                                            ))
+                                        })}
                                     </tbody>
                                 </table>
                             </div>
@@ -430,6 +498,39 @@ export default function ExtractorPage() {
                                 ))}
                             </div>
                         )}
+                    </div>
+                </div>
+            </div>
+
+            {/* Features (consistente con las demás herramientas) */}
+            <div className="max-w-7xl mx-auto px-6 pb-4">
+                <div className="grid md:grid-cols-3 gap-6 mt-8">
+                    <div className="flex items-start gap-4">
+                        <div className="w-10 h-10 rounded-xl bg-blue-50 flex items-center justify-center flex-shrink-0">
+                            <FileText className="w-5 h-5 text-[#009FE3]" />
+                        </div>
+                        <div>
+                            <h4 className="font-bold text-slate-900 mb-1">Extracción completa</h4>
+                            <p className="text-sm text-slate-500">Emisor, cliente, CUFE, ítems con su impuesto, retenciones y totales de cada factura.</p>
+                        </div>
+                    </div>
+                    <div className="flex items-start gap-4">
+                        <div className="w-10 h-10 rounded-xl bg-blue-50 flex items-center justify-center flex-shrink-0">
+                            <CheckCircle className="w-5 h-5 text-[#009FE3]" />
+                        </div>
+                        <div>
+                            <h4 className="font-bold text-slate-900 mb-1">Aviso de fallos</h4>
+                            <p className="text-sm text-slate-500">Si un archivo no se puede procesar, te decimos cuál y por qué — y el crédito se devuelve.</p>
+                        </div>
+                    </div>
+                    <div className="flex items-start gap-4">
+                        <div className="w-10 h-10 rounded-xl bg-blue-50 flex items-center justify-center flex-shrink-0">
+                            <Download className="w-5 h-5 text-[#009FE3]" />
+                        </div>
+                        <div>
+                            <h4 className="font-bold text-slate-900 mb-1">Exportación a Excel</h4>
+                            <p className="text-sm text-slate-500">Una fila por ítem con toda la información de la factura, incluido el CUFE.</p>
+                        </div>
                     </div>
                 </div>
             </div>

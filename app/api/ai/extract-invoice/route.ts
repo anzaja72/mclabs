@@ -11,21 +11,24 @@ type ContentPart =
     | { type: 'file'; file: { filename: string; file_data: string } };
 
 const EXTRACTOR_SYSTEM_PROMPT = `
-Actúa como un sistema de OCR y extracción de datos experto. Analiza el texto de la factura y extrae los datos en formato JSON estricto.
+Actúa como un sistema de OCR y extracción de datos experto en FACTURAS ELECTRÓNICAS COLOMBIANAS (DIAN). Analiza el documento y extrae TODOS los datos en JSON estricto.
 Estructura JSON requerida:
 {
-    "generalInfo": { "invoiceNumber": "", "issueDate": "YYYY-MM-DD", "dueDate": "", "paymentMethod": "" },
-    "customerInfo": { "name": "", "idNumber": "", "address": "", "email": "" },
-    "issuerInfo": { "companyName": "", "nit": "" },
+    "generalInfo": { "invoiceNumber": "", "cufe": "", "issueDate": "YYYY-MM-DD", "dueDate": "", "paymentMethod": "", "currency": "COP" },
+    "issuerInfo": { "companyName": "", "nit": "", "address": "", "city": "", "phone": "", "email": "" },
+    "customerInfo": { "name": "", "idNumber": "", "address": "", "city": "", "email": "" },
     "lineItems": [
-        { "description": "", "quantity": 0, "unitPrice": 0, "totalValue": 0 }
+        { "description": "", "quantity": 0, "unitPrice": 0, "discount": 0, "taxRate": 0, "taxValue": 0, "totalValue": 0 }
     ],
-    "totals": { "grandTotal": 0 }
+    "totals": { "subtotal": 0, "discounts": 0, "iva": 0, "inc": 0, "reteFuente": 0, "reteIva": 0, "reteIca": 0, "grandTotal": 0 }
 }
 Reglas:
-1. Si un campo no está claro, usa null o "".
-2. Los números deben ser numéricos puros.
-3. Devuelve SOLO el JSON, sin texto adicional ni bloques de markdown.
+1. "cufe": el código CUFE/CUDE completo (cadena hexadecimal larga); si no aparece usa "".
+2. Por cada ítem: "taxRate" es la tarifa de IVA/INC en % (ej. 19) y "taxValue" el impuesto en pesos de ESE ítem; si la factura no discrimina impuesto por ítem, calcula proporcional al subtotal del ítem o usa 0.
+3. Los números deben ser numéricos puros, sin símbolos ni separadores de miles.
+4. Si un campo no está claro, usa null o "" (o 0 para números).
+5. Si el documento NO es una factura ni documento equivalente (ej. un extracto bancario), devuelve {"noEsFactura": true, "tipoDetectado": "descripción corta"}.
+6. Devuelve SOLO el JSON, sin texto adicional ni bloques de markdown.
 `;
 
 export async function POST(request: NextRequest) {
@@ -102,6 +105,12 @@ export async function POST(request: NextRequest) {
         // fiable en documentos reales (78s y 0 datos en un extracto), y dos
         // intentos encadenados superan el corte de ~31s de Netlify.
         const parsed = await runExtraction(isPdf ? 'mistral-ocr' : null);
+        if (parsed && parsed.noEsFactura) {
+            const tipo = typeof parsed.tipoDetectado === 'string' && parsed.tipoDetectado
+                ? ` (parece ser: ${parsed.tipoDetectado})`
+                : '';
+            throw new Error(`El documento no es una factura${tipo}. Este módulo extrae facturas y documentos equivalentes.`);
+        }
         if (!parsed || !hasInvoiceData(parsed)) {
             throw new Error('No se pudieron leer los datos de la factura. Prueba con un archivo más legible.');
         }
