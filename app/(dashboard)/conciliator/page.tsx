@@ -1,0 +1,649 @@
+'use client'
+
+import React, { useState, useMemo, useEffect } from 'react';
+import Link from 'next/link';
+import Image from 'next/image';
+import { useAuth } from '@/lib/auth-context';
+import {
+    FileText, RefreshCw, FileSpreadsheet, Eye, Download, Search, AlertTriangle, CheckCircle,
+    Shield, Sparkles, User
+} from 'lucide-react';
+import * as XLSX from 'xlsx';
+import { hojaAObjetos, CLAVES_CONTABLE, CLAVES_DIAN } from '@/lib/excel-utils';
+
+import { FileState, DataState, ResultItem } from '@/types/conciliator';
+import { procesarDatosDIAN, procesarDatosContables, generarConciliacion, formatearMoneda } from '@/lib/conciliator-logic';
+import { reconcileDianWithAI } from '@/lib/ai-service';
+import { FileCard } from '@/components/conciliator/file-card';
+import { ModalDetalle } from '@/components/conciliator/modal-detalle';
+import { ModalEstadosFinancieros } from '@/components/conciliator/modal-estados';
+import { Button } from '@/components/ui/button';
+import { useCredits } from '@/lib/credits-context';
+import { CreditsBanner } from '@/components/credits-banner';
+import { PaywallModal } from '@/components/paywall-modal';
+
+export default function ConciliatorPage() {
+    const { user } = useAuth();
+    const { useCredit, getToolCredits } = useCredits();
+    const [showPaywall, setShowPaywall] = useState(false);
+    const [creditUsed, setCreditUsed] = useState(false);
+    const [files, setFiles] = useState<FileState>({ contable: null, dian: null });
+    const [data, setData] = useState<DataState>({ contable: null, dian: null, contableCount: 0, dianCount: 0 });
+    const [results, setResults] = useState<ResultItem[]>([]);
+    const [loading, setLoading] = useState(false);
+    const [selectedItem, setSelectedItem] = useState<ResultItem | null>(null);
+    const [showFinancialModal, setShowFinancialModal] = useState(false);
+    const [searchTerm, setSearchTerm] = useState('');
+    const [instructions, setInstructions] = useState('');
+    const [aiSummary, setAiSummary] = useState('');
+    const [aiLoading, setAiLoading] = useState(false);
+    const [aiError, setAiError] = useState('');
+
+    const handleFile = async (type: 'contable' | 'dian', e: React.ChangeEvent<HTMLInputElement>) => {
+        if (e.target.files && e.target.files[0]) {
+            const file = e.target.files[0];
+            setFiles(prev => ({ ...prev, [type]: file }));
+            setLoading(true);
+
+            try {
+                const buffer = await file.arrayBuffer();
+                const wb = XLSX.read(buffer, { type: 'array' });
+                const ws = wb.Sheets[wb.SheetNames[0]];
+                // Detecta la fila de encabezados aunque el software contable
+                // exporte con filas de título encima (empresa, NIT, período).
+                const jsonData = hojaAObjetos(ws, type === 'dian' ? CLAVES_DIAN : CLAVES_CONTABLE);
+
+                if (jsonData.length === 0) {
+                    alert(type === 'dian'
+                        ? 'No pude ubicar los encabezados del reporte DIAN. El archivo debe tener columnas como "Tipo de documento", "NIT Emisor", "NIT Receptor", "Total" y "Grupo". Si tu archivo es distinto, deja los encabezados de datos en la primera fila.'
+                        : 'No pude ubicar los encabezados del auxiliar contable. El archivo debe tener columnas como "Identificación" (NIT del tercero), "Débito" y "Crédito". Si tu software exporta distinto, deja los encabezados de datos en la primera fila.');
+                    setFiles(prev => ({ ...prev, [type]: null }));
+                    return;
+                }
+
+                if (type === 'dian') {
+                    const { mapa, totalRegistros } = procesarDatosDIAN(jsonData as any[]);
+                    setData(prev => ({ ...prev, dian: mapa, dianCount: totalRegistros }));
+                } else {
+                    const { mapa, totalRegistros } = procesarDatosContables(jsonData as any[]);
+                    setData(prev => ({ ...prev, contable: mapa, contableCount: totalRegistros }));
+                }
+            } catch (error) {
+                console.error(error);
+                alert('Error al leer el archivo. Asegúrate de que sea un Excel válido.');
+            } finally {
+                setLoading(false);
+            }
+        }
+    };
+
+    useEffect(() => {
+        const runConciliation = async () => {
+            if (data.dian && data.contable) {
+                // Check credits before processing
+                if (!creditUsed && getToolCredits('conciliator') <= 0) {
+                    setShowPaywall(true);
+                    return;
+                }
+
+                if (!creditUsed) {
+                    const result = await useCredit('conciliator');
+                    if (!result.success) {
+                        if (result.needsPurchase) setShowPaywall(true);
+                        return;
+                    }
+                    setCreditUsed(true);
+                }
+
+                const res = generarConciliacion(data.dian, data.contable);
+                setResults(res);
+
+                // Si hay instrucciones personalizadas, ajustar el diagnóstico con IA
+                if (instructions.trim()) {
+                    await applyAIAdjustments(res, instructions.trim());
+                }
+            }
+        };
+        runConciliation();
+    }, [data.dian, data.contable]);
+
+    // Envía los resultados del cruce + instrucciones del usuario a la IA,
+    // que reclasifica estados y añade notas (p. ej. consolidar nómina desagregada)
+    const applyAIAdjustments = async (rows: ResultItem[], userInstructions: string) => {
+        setAiLoading(true);
+        setAiError('');
+        setAiSummary('');
+        try {
+            const payload = rows.map(r => ({
+                nit: r.nit, tipo: r.tipo, dianTotal: r.dianTotal, dianDocs: r.dianDocs,
+                contableTotal: r.contableTotal, diferencia: r.diferencia, estado: r.estado,
+            }));
+            const { adjustments, summary } = await reconcileDianWithAI(payload, userInstructions);
+
+            if (adjustments.length > 0) {
+                const adjMap = new Map(adjustments.map(a => [`${a.nit}::${a.tipo}`, a]));
+                setResults(prev => prev.map(r => {
+                    const adj = adjMap.get(`${r.nit}::${r.tipo}`);
+                    if (!adj) return r;
+                    return { ...r, estado: adj.estado || r.estado, notaIA: adj.nota || '' };
+                }));
+            }
+            setAiSummary(summary || (adjustments.length === 0 ? 'La IA no encontró ajustes necesarios según tus instrucciones.' : ''));
+        } catch (err: unknown) {
+            setAiError(err instanceof Error ? err.message : 'Error al aplicar las instrucciones con IA');
+        } finally {
+            setAiLoading(false);
+        }
+    };
+
+    const filteredResults = useMemo(() => {
+        return results.filter(r =>
+            r.nit.includes(searchTerm) ||
+            r.estado.toLowerCase().includes(searchTerm.toLowerCase())
+        );
+    }, [results, searchTerm]);
+
+    const exportarExcel = () => {
+        if (results.length === 0) return;
+        const ws = XLSX.utils.json_to_sheet(results.map(r => ({
+            NIT: r.nit,
+            Tipo: r.tipo,
+            'Valor DIAN': r.dianTotal,
+            'Docs DIAN': r.dianDocs,
+            'Valor Contable': r.contableTotal,
+            'Diferencia': r.diferencia,
+            'Estado': r.estado,
+            'Nota IA': r.notaIA || ''
+        })));
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, "Conciliación");
+        XLSX.writeFile(wb, "conciliacion.xlsx");
+    };
+
+    const handleNewConciliation = () => {
+        setFiles({ contable: null, dian: null });
+        setData({ contable: null, dian: null, contableCount: 0, dianCount: 0 });
+        setResults([]);
+        setSearchTerm('');
+        setCreditUsed(false);
+        setInstructions('');
+        setAiSummary('');
+        setAiError('');
+    };
+
+    return (
+        <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50/30 to-white">
+            {/* Header */}
+            <header className="sticky top-0 z-50 bg-white/80 backdrop-blur-lg border-b border-slate-200/50">
+                <div className="container flex h-16 items-center justify-between">
+                    <div className="flex items-center gap-8">
+                        <Link href="/" className="flex items-center gap-2">
+                            <Image
+                                src="/mc-labs-logo.png"
+                                alt="MC Labs"
+                                width={36}
+                                height={36}
+                                className="object-contain"
+                            />
+                            <div className="flex flex-col">
+                                <span className="font-bold text-slate-900">MC Labs</span>
+                                <span className="text-[10px] text-[#009FE3] font-medium -mt-1">ACCOUNTING AI</span>
+                            </div>
+                        </Link>
+
+                        <nav className="hidden md:flex items-center gap-1">
+                            <Link href="/" className="px-4 py-2 text-sm font-medium text-slate-600 hover:text-slate-900 rounded-lg hover:bg-slate-100 transition-colors">
+                                Dashboard
+                            </Link>
+                            <Link
+                                href="/conciliator"
+                                className="px-4 py-2 text-sm font-medium text-[#009FE3] bg-blue-50 rounded-lg"
+                            >
+                                Conciliador
+                            </Link>
+                            <Link
+                                href="/bank-recs"
+                                className="px-4 py-2 text-sm font-medium text-slate-600 hover:text-slate-900 rounded-lg hover:bg-slate-100 transition-colors"
+                            >
+                                Bancario
+                            </Link>
+                            <Link
+                                href="/dashboards"
+                                className="px-4 py-2 text-sm font-medium text-slate-600 hover:text-slate-900 rounded-lg hover:bg-slate-100 transition-colors"
+                            >
+                                Tableros
+                            </Link>
+                            <Link
+                                href="/extractor"
+                                className="px-4 py-2 text-sm font-medium text-slate-600 hover:text-slate-900 rounded-lg hover:bg-slate-100 transition-colors"
+                            >
+                                Extractor
+                            </Link>
+                        </nav>
+                    </div>
+
+                    <div className="flex items-center gap-3">
+                        <span className="text-sm text-slate-600">{user?.email?.split('@')[0] || 'Usuario'}</span>
+                        <div className="w-9 h-9 rounded-full bg-gradient-to-br from-orange-300 to-orange-400 flex items-center justify-center">
+                            <User className="w-5 h-5 text-white" />
+                        </div>
+                    </div>
+                </div>
+            </header>
+
+            {/* Main Content */}
+            <main className="container py-8">
+                {/* Page Header */}
+                <div className="flex items-start justify-between mb-8">
+                    <div>
+                        <div className="flex items-center gap-2 text-[#009FE3] text-sm font-semibold mb-2">
+                            <Shield className="w-4 h-4" />
+                            HERRAMIENTA DE AUDITORÍA FISCAL
+                        </div>
+                        <h1 className="text-3xl font-black text-slate-900 mb-2">
+                            Conciliador Fiscal vs Contable
+                        </h1>
+                        <p className="text-slate-600 max-w-2xl">
+                            Optimice sus auditorías comparando automáticamente los reportes de facturación de la
+                            DIAN contra su auxiliar contable utilizando inteligencia artificial.
+                        </p>
+                    </div>
+                    <Button
+                        variant="outline"
+                        onClick={handleNewConciliation}
+                        className="flex items-center gap-2 rounded-xl"
+                    >
+                        <RefreshCw className="w-4 h-4" />
+                        Nueva Conciliación
+                    </Button>
+                </div>
+
+                {/* Credits Banner */}
+                <div className="mb-6">
+                    <CreditsBanner tool="conciliator" toolLabel="Conciliación DIAN" />
+                </div>
+
+                {/* Upload Cards */}
+                <div className="grid md:grid-cols-2 gap-6 mb-8">
+                    {/* DIAN Report Card */}
+                    <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm hover:shadow-lg transition-shadow">
+                        <div className="flex items-start gap-4 mb-6">
+                            <div className="w-12 h-12 rounded-xl bg-blue-50 flex items-center justify-center">
+                                <FileText className="w-6 h-6 text-[#009FE3]" />
+                            </div>
+                            <div>
+                                <h3 className="font-bold text-slate-900">Reporte Facturación DIAN</h3>
+                                <p className="text-sm text-slate-500">Archivos .xlsx, .xls o .csv</p>
+                            </div>
+                        </div>
+
+                        <label className="block cursor-pointer">
+                            <div className={`border-2 border-dashed rounded-xl p-8 text-center transition-all ${files.dian
+                                    ? 'border-green-300 bg-green-50'
+                                    : 'border-slate-200 hover:border-[#009FE3] hover:bg-blue-50/30'
+                                }`}>
+                                {files.dian ? (
+                                    <div className="flex flex-col items-center gap-2">
+                                        <CheckCircle className="w-10 h-10 text-green-500" />
+                                        <p className="font-medium text-slate-900">{files.dian.name}</p>
+                                        <p className="text-sm text-slate-500">{data.dianCount} registros cargados</p>
+                                    </div>
+                                ) : (
+                                    <>
+                                        <FileText className="w-10 h-10 text-slate-300 mx-auto mb-3" />
+                                        <p className="font-semibold text-slate-700">Seleccionar archivo</p>
+                                        <p className="text-sm text-slate-400">o arrastre y suelte el reporte DIAN aquí</p>
+                                    </>
+                                )}
+                            </div>
+                            <input
+                                type="file"
+                                className="hidden"
+                                accept=".xlsx,.xls,.csv"
+                                onChange={(e) => handleFile('dian', e)}
+                            />
+                        </label>
+                    </div>
+
+                    {/* Contable Card */}
+                    <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm hover:shadow-lg transition-shadow">
+                        <div className="flex items-start gap-4 mb-6">
+                            <div className="w-12 h-12 rounded-xl bg-blue-50 flex items-center justify-center">
+                                <FileSpreadsheet className="w-6 h-6 text-[#009FE3]" />
+                            </div>
+                            <div>
+                                <h3 className="font-bold text-slate-900">Auxiliar Contable</h3>
+                                <p className="text-sm text-slate-500">Excel generado por su software contable</p>
+                            </div>
+                        </div>
+
+                        <label className="block cursor-pointer">
+                            <div className={`border-2 border-dashed rounded-xl p-8 text-center transition-all ${files.contable
+                                    ? 'border-green-300 bg-green-50'
+                                    : 'border-slate-200 hover:border-[#009FE3] hover:bg-blue-50/30'
+                                }`}>
+                                {files.contable ? (
+                                    <div className="flex flex-col items-center gap-2">
+                                        <CheckCircle className="w-10 h-10 text-green-500" />
+                                        <p className="font-medium text-slate-900">{files.contable.name}</p>
+                                        <p className="text-sm text-slate-500">{data.contableCount} registros cargados</p>
+                                    </div>
+                                ) : (
+                                    <>
+                                        <FileSpreadsheet className="w-10 h-10 text-slate-300 mx-auto mb-3" />
+                                        <p className="font-semibold text-slate-700">Seleccionar archivo</p>
+                                        <p className="text-sm text-slate-400">o arrastre y suelte el auxiliar contable aquí</p>
+                                    </>
+                                )}
+                            </div>
+                            <input
+                                type="file"
+                                className="hidden"
+                                accept=".xlsx,.xls,.csv"
+                                onChange={(e) => handleFile('contable', e)}
+                            />
+                        </label>
+                    </div>
+                </div>
+
+                {/* Custom Instructions */}
+                <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm mb-8">
+                    <div className="flex items-start gap-4 mb-4">
+                        <div className="w-12 h-12 rounded-xl bg-blue-50 flex items-center justify-center flex-shrink-0">
+                            <Sparkles className="w-6 h-6 text-[#009FE3]" />
+                        </div>
+                        <div className="flex-1">
+                            <h3 className="font-bold text-slate-900">Instrucciones personalizadas para la IA (opcional)</h3>
+                            <p className="text-sm text-slate-500">
+                                Advierte al modelo sobre particularidades de tu facturación para ajustar el diagnóstico del cruce.
+                            </p>
+                        </div>
+                        {results.length > 0 && instructions.trim() && (
+                            <Button
+                                onClick={() => applyAIAdjustments(results, instructions.trim())}
+                                disabled={aiLoading}
+                                className="bg-[#009FE3] hover:bg-[#0088c7] text-white rounded-xl"
+                            >
+                                {aiLoading ? (
+                                    <><RefreshCw className="w-4 h-4 mr-2 animate-spin" /> Aplicando...</>
+                                ) : (
+                                    <><Sparkles className="w-4 h-4 mr-2" /> Aplicar con IA</>
+                                )}
+                            </Button>
+                        )}
+                    </div>
+                    <textarea
+                        value={instructions}
+                        onChange={(e) => setInstructions(e.target.value)}
+                        maxLength={2000}
+                        rows={3}
+                        placeholder={'Ejemplos:\n• "El NIT 900123456 factura por anticipos: las diferencias de ese tercero no son críticas."\n• "Los pagos de nómina están desagregados en contabilidad pero consolidados en el reporte DIAN: tenlo en cuenta y reclasifica."\n• "Ignora diferencias menores a $5.000 por redondeo."'}
+                        className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all text-slate-900 text-sm resize-y"
+                    />
+                </div>
+
+                {/* AI summary / error */}
+                {aiLoading && (
+                    <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 mb-6 flex items-center gap-3 text-blue-700">
+                        <RefreshCw className="w-5 h-5 animate-spin flex-shrink-0" />
+                        La IA está ajustando el diagnóstico según tus instrucciones...
+                    </div>
+                )}
+                {aiSummary && !aiLoading && (
+                    <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 mb-6 flex items-start gap-3">
+                        <Sparkles className="w-5 h-5 text-[#009FE3] flex-shrink-0 mt-0.5" />
+                        <div>
+                            <p className="font-medium text-slate-900 text-sm mb-1">Ajustes aplicados por la IA</p>
+                            <p className="text-sm text-slate-600">{aiSummary}</p>
+                        </div>
+                    </div>
+                )}
+                {aiError && !aiLoading && (
+                    <div className="bg-red-50 border border-red-200 rounded-xl p-4 mb-6 flex items-start gap-3">
+                        <AlertTriangle className="w-5 h-5 text-red-500 flex-shrink-0 mt-0.5" />
+                        <p className="text-sm text-red-600">{aiError}</p>
+                    </div>
+                )}
+
+                {/* Auto-process message */}
+                {files.dian && files.contable && results.length === 0 && loading && (
+                    <div className="flex justify-center mb-8">
+                        <div className="bg-blue-50 text-blue-700 px-6 py-3 rounded-full flex items-center gap-3">
+                            <RefreshCw className="w-5 h-5 animate-spin" />
+                            Procesando conciliación automáticamente...
+                        </div>
+                    </div>
+                )}
+
+                {/* Guía de estados y ayuda visual */}
+                {results.length > 0 && (
+                    <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5 mb-6">
+                        <div className="grid md:grid-cols-2 gap-6">
+                            <div>
+                                <h4 className="font-bold text-slate-900 mb-3">Guía de Estados</h4>
+                                <ul className="space-y-2 text-sm text-slate-600">
+                                    <li className="flex items-start gap-2">
+                                        <span className="mt-0.5 inline-flex items-center gap-1 text-green-600 font-bold text-xs bg-green-100 px-2 py-1 rounded-full flex-shrink-0"><CheckCircle size={12} /> OK</span>
+                                        <span>Diferencia inmaterial (hasta $100 pesos).</span>
+                                    </li>
+                                    <li className="flex items-start gap-2">
+                                        <span className="mt-0.5 inline-flex items-center gap-1 text-yellow-600 font-bold text-xs bg-yellow-100 px-2 py-1 rounded-full flex-shrink-0"><AlertTriangle size={12} /> REVISAR</span>
+                                        <span>Diferencia mayor a $100 pero menor al 10% del total. Requiere revisión.</span>
+                                    </li>
+                                    <li className="flex items-start gap-2">
+                                        <span className="mt-0.5 inline-flex items-center gap-1 text-red-600 font-bold text-xs bg-red-100 px-2 py-1 rounded-full flex-shrink-0"><AlertTriangle size={12} /> CRÍTICO</span>
+                                        <span>Diferencia del 10% o más del total reportado en DIAN.</span>
+                                    </li>
+                                    <li className="flex items-start gap-2">
+                                        <span className="mt-0.5 inline-flex items-center gap-1 text-orange-600 font-bold text-xs bg-orange-100 px-2 py-1 rounded-full flex-shrink-0"><AlertTriangle size={12} /> NO EN CONTAB.</span>
+                                        <span>El NIT existe en DIAN pero no tiene movimientos en el auxiliar contable.</span>
+                                    </li>
+                                </ul>
+                            </div>
+                            <div>
+                                <h4 className="font-bold text-slate-900 mb-3">Ayuda Visual (Detalle)</h4>
+                                <p className="text-sm text-slate-500 mb-2">Al abrir el detalle de un tercero:</p>
+                                <ul className="space-y-2 text-sm text-slate-600">
+                                    <li className="flex items-start gap-2">
+                                        <span className="mt-0.5 w-4 h-4 rounded bg-green-100 border border-green-300 flex-shrink-0"></span>
+                                        <span><span className="font-semibold text-slate-800">Verde:</span> el valor exacto existe en ambos lados (DIAN y contabilidad).</span>
+                                    </li>
+                                    <li className="flex items-start gap-2">
+                                        <span className="mt-0.5 w-4 h-4 rounded bg-yellow-100 border border-yellow-300 flex-shrink-0"></span>
+                                        <span><span className="font-semibold text-slate-800">Amarillo:</span> el valor no se encontró en la contraparte — identifica rápido qué factura falta o tiene valor diferente.</span>
+                                    </li>
+                                </ul>
+                            </div>
+                        </div>
+                    </div>
+                )}
+
+                {/* Results Section */}
+                {results.length > 0 && (
+                    <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden mb-8">
+                        <div className="p-4 border-b bg-slate-50 flex flex-col sm:flex-row justify-between items-center gap-4">
+                            <div className="flex items-center gap-4">
+                                <h3 className="font-bold text-slate-900">Resultados de Conciliación</h3>
+                                <div className="relative">
+                                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+                                    <input
+                                        type="text"
+                                        placeholder="Buscar por NIT o Estado..."
+                                        className="pl-10 pr-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-sm bg-white"
+                                        value={searchTerm}
+                                        onChange={(e) => setSearchTerm(e.target.value)}
+                                    />
+                                </div>
+                                <span className="text-sm text-slate-500 font-medium">
+                                    {filteredResults.length} registros
+                                </span>
+                            </div>
+
+                            <div className="flex gap-2">
+                                {data.contable && (
+                                    <button
+                                        onClick={() => setShowFinancialModal(true)}
+                                        className="text-slate-600 bg-slate-100 hover:bg-slate-200 px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 transition-colors"
+                                    >
+                                        <FileText size={16} /> Estados Financieros
+                                    </button>
+                                )}
+                                <button
+                                    onClick={exportarExcel}
+                                    className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 transition-colors shadow-sm"
+                                >
+                                    <Download size={18} /> Exportar Excel
+                                </button>
+                            </div>
+                        </div>
+
+                        <div className="overflow-x-auto">
+                            <table className="w-full text-sm text-left">
+                                <thead className="bg-slate-50 text-slate-600 font-semibold uppercase text-xs tracking-wider">
+                                    <tr>
+                                        <th className="px-6 py-3">NIT / Tercero</th>
+                                        <th className="px-6 py-3">Tipo</th>
+                                        <th className="px-6 py-3 text-right">Valor DIAN</th>
+                                        <th className="px-6 py-3 text-right">Valor Contable</th>
+                                        <th className="px-6 py-3 text-right">Diferencia</th>
+                                        <th className="px-6 py-3 text-center">Estado</th>
+                                        <th className="px-6 py-3 text-center">Acción</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y divide-slate-100">
+                                    {filteredResults.map((row) => (
+                                        <tr key={`${row.nit}-${row.tipo}`} className="hover:bg-blue-50/50 transition-colors group">
+                                            <td className="px-6 py-4 font-medium text-slate-900">{row.nit}</td>
+                                            <td className="px-6 py-4">
+                                                <span className={`px-2 py-1 rounded-full text-[10px] font-bold ${row.tipo === 'VENTA' ? 'bg-blue-100 text-blue-700' : 'bg-purple-100 text-purple-700'}`}>
+                                                    {row.tipo}
+                                                </span>
+                                            </td>
+                                            <td className="px-6 py-4 text-right font-mono text-slate-600">{formatearMoneda(row.dianTotal)}</td>
+                                            <td className="px-6 py-4 text-right font-mono text-slate-600">{formatearMoneda(row.contableTotal)}</td>
+                                            <td className={`px-6 py-4 text-right font-mono font-bold ${row.diferencia === 0 ? 'text-slate-300' : 'text-slate-800'}`}>
+                                                {formatearMoneda(row.diferencia)}
+                                            </td>
+                                            <td className="px-6 py-4 text-center">
+                                                {row.estado === 'OK' && <span className="inline-flex items-center gap-1 text-green-600 font-bold text-xs bg-green-100 px-2 py-1 rounded-full"><CheckCircle size={12} /> OK</span>}
+                                                {row.estado === 'ADVERTENCIA' && <span className="inline-flex items-center gap-1 text-yellow-600 font-bold text-xs bg-yellow-100 px-2 py-1 rounded-full"><AlertTriangle size={12} /> REVISAR</span>}
+                                                {row.estado === 'CRITICO' && <span className="inline-flex items-center gap-1 text-red-600 font-bold text-xs bg-red-100 px-2 py-1 rounded-full"><AlertTriangle size={12} /> CRÍTICO</span>}
+                                                {row.estado === 'SOLO_DIAN' && <span className="inline-flex items-center gap-1 text-orange-600 font-bold text-xs bg-orange-100 px-2 py-1 rounded-full"><AlertTriangle size={12} /> NO EN CONTAB.</span>}
+                                                {row.notaIA && (
+                                                    <p className="text-[11px] text-[#009FE3] mt-1 max-w-[220px] mx-auto flex items-start gap-1 text-left">
+                                                        <Sparkles size={11} className="flex-shrink-0 mt-0.5" /> {row.notaIA}
+                                                    </p>
+                                                )}
+                                            </td>
+                                            <td className="px-6 py-4 text-center">
+                                                <button
+                                                    onClick={() => setSelectedItem(row)}
+                                                    className="text-blue-600 hover:bg-blue-100 p-2 rounded-full transition-colors"
+                                                    title="Ver detalle"
+                                                >
+                                                    <Eye size={18} />
+                                                </button>
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+
+                        {filteredResults.length === 0 && (
+                            <div className="p-12 text-center text-slate-400">
+                                <Search size={48} className="mx-auto mb-4 opacity-20" />
+                                <p>No se encontraron resultados para tu búsqueda.</p>
+                            </div>
+                        )}
+                    </div>
+                )}
+
+                {/* Features */}
+                <div className="grid md:grid-cols-3 gap-6">
+                    <div className="flex items-start gap-4">
+                        <div className="w-10 h-10 rounded-xl bg-blue-50 flex items-center justify-center flex-shrink-0">
+                            <Shield className="w-5 h-5 text-[#009FE3]" />
+                        </div>
+                        <div>
+                            <h4 className="font-bold text-slate-900 mb-1">Seguridad de Datos</h4>
+                            <p className="text-sm text-slate-600">
+                                Sus archivos se procesan de forma privada y son eliminados automáticamente al finalizar la sesión.
+                            </p>
+                        </div>
+                    </div>
+                    <div className="flex items-start gap-4">
+                        <div className="w-10 h-10 rounded-xl bg-blue-50 flex items-center justify-center flex-shrink-0">
+                            <Sparkles className="w-5 h-5 text-[#009FE3]" />
+                        </div>
+                        <div>
+                            <h4 className="font-bold text-slate-900 mb-1">Cruce Inteligente</h4>
+                            <p className="text-sm text-slate-600">
+                                Nuestra IA identifica discrepancias en NITs, valores base, impuestos y fechas entre ambos reportes.
+                            </p>
+                        </div>
+                    </div>
+                    <div className="flex items-start gap-4">
+                        <div className="w-10 h-10 rounded-xl bg-blue-50 flex items-center justify-center flex-shrink-0">
+                            <Download className="w-5 h-5 text-[#009FE3]" />
+                        </div>
+                        <div>
+                            <h4 className="font-bold text-slate-900 mb-1">Exportación Directa</h4>
+                            <p className="text-sm text-slate-600">
+                                Descargue el informe detallado de diferencias listo para ser conciliado en su software contable.
+                            </p>
+                        </div>
+                    </div>
+                </div>
+            </main>
+
+            {/* Footer */}
+            <footer className="border-t bg-white mt-16">
+                <div className="container py-6 flex flex-col md:flex-row justify-between items-center gap-4">
+                    <div className="flex items-center gap-2">
+                        <Image
+                            src="/mc-labs-logo.png"
+                            alt="MC Labs"
+                            width={24}
+                            height={24}
+                            className="object-contain"
+                        />
+                        <span className="text-sm font-medium text-slate-700">MC Labs</span>
+                    </div>
+                    <p className="text-sm text-slate-500">
+                        © 2024 MC LABS. TODOS LOS DERECHOS RESERVADOS.
+                    </p>
+                    <div className="flex gap-6 text-sm text-slate-500">
+                        <a href="#" className="hover:text-slate-900">SOPORTE</a>
+                        <a href="#" className="hover:text-slate-900">PRIVACIDAD</a>
+                        <a href="#" className="hover:text-slate-900">MANUAL</a>
+                    </div>
+                </div>
+            </footer>
+
+            {/* Paywall Modal */}
+            {showPaywall && (
+                <PaywallModal
+                    toolName="Conciliación DIAN"
+                    onClose={() => setShowPaywall(false)}
+                />
+            )}
+
+            {/* Modals */}
+            {selectedItem && (
+                <ModalDetalle
+                    data={selectedItem}
+                    onClose={() => setSelectedItem(null)}
+                />
+            )}
+
+            {showFinancialModal && data.contable && (
+                <ModalEstadosFinancieros
+                    mapaContable={data.contable}
+                    resultados={results}
+                    onClose={() => setShowFinancialModal(false)}
+                />
+            )}
+        </div>
+    );
+}
