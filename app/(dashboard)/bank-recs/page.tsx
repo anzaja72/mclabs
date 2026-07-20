@@ -21,6 +21,7 @@ import {
     X
 } from 'lucide-react'
 import * as XLSX from 'xlsx'
+import { hojaAObjetos } from '@/lib/excel-utils'
 import { extractBankDataFromPDF, reconcileBankWithAI, analizarConciliacion, NeedsPurchaseError } from '@/lib/ai-service'
 import type { AnalisisContable } from '@/lib/ai-service'
 import { useCredits } from '@/lib/credits-context'
@@ -120,7 +121,8 @@ export default function BankRecsPage() {
         const arrayBuffer = await file.arrayBuffer()
         const workbook = XLSX.read(arrayBuffer, { type: 'array' })
         const firstSheet = workbook.Sheets[workbook.SheetNames[0]]
-        const data = XLSX.utils.sheet_to_json<Record<string, unknown>>(firstSheet)
+        // Detección de encabezados: tolera filas de título del software contable
+        const data = hojaAObjetos(firstSheet, ['fecha', 'debito', 'credito', 'debe', 'haber', 'descripcion', 'concepto', 'comprobante', 'tercero'])
         if (data.length === 0) return []
 
         // Mapea los encabezados reales del archivo a los campos que necesitamos.

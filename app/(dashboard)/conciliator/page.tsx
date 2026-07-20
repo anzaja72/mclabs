@@ -9,6 +9,7 @@ import {
     Shield, Sparkles, User
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
+import { hojaAObjetos, CLAVES_CONTABLE, CLAVES_DIAN } from '@/lib/excel-utils';
 
 import { FileState, DataState, ResultItem } from '@/types/conciliator';
 import { procesarDatosDIAN, procesarDatosContables, generarConciliacion, formatearMoneda } from '@/lib/conciliator-logic';
@@ -48,7 +49,17 @@ export default function ConciliatorPage() {
                 const buffer = await file.arrayBuffer();
                 const wb = XLSX.read(buffer, { type: 'array' });
                 const ws = wb.Sheets[wb.SheetNames[0]];
-                const jsonData = XLSX.utils.sheet_to_json(ws, { defval: '', raw: false });
+                // Detecta la fila de encabezados aunque el software contable
+                // exporte con filas de título encima (empresa, NIT, período).
+                const jsonData = hojaAObjetos(ws, type === 'dian' ? CLAVES_DIAN : CLAVES_CONTABLE);
+
+                if (jsonData.length === 0) {
+                    alert(type === 'dian'
+                        ? 'No pude ubicar los encabezados del reporte DIAN. El archivo debe tener columnas como "Tipo de documento", "NIT Emisor", "NIT Receptor", "Total" y "Grupo". Si tu archivo es distinto, deja los encabezados de datos en la primera fila.'
+                        : 'No pude ubicar los encabezados del auxiliar contable. El archivo debe tener columnas como "Identificación" (NIT del tercero), "Débito" y "Crédito". Si tu software exporta distinto, deja los encabezados de datos en la primera fila.');
+                    setFiles(prev => ({ ...prev, [type]: null }));
+                    return;
+                }
 
                 if (type === 'dian') {
                     const { mapa, totalRegistros } = procesarDatosDIAN(jsonData as any[]);

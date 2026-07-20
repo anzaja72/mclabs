@@ -237,6 +237,9 @@ export const procesarDatosContables = (datosRaw: any[]) => {
                 totalDebito: 0,
                 totalCredito: 0,
                 neto: 0,
+                // Sumas por clase de cuenta PUC: el cruce correcto es
+                // ventas ↔ cartera (13)/ingresos (41) y compras ↔ proveedores (22)/costos-gastos.
+                porClase: { deb13: 0, cred13: 0, cred41: 0, deb41: 0, cred22: 0, deb22: 0, debGasto: 0 },
                 movimientos: []
             });
         }
@@ -245,6 +248,15 @@ export const procesarDatosContables = (datosRaw: any[]) => {
         entry.totalDebito += debito;
         entry.totalCredito += credito;
         entry.neto += (debito - credito);
+
+        const codCuenta = String(cuenta ?? '').replace(/[^0-9]/g, '');
+        const grupoCta = codCuenta.slice(0, 2);
+        if (grupoCta === '13') { entry.porClase.deb13 += debito; entry.porClase.cred13 += credito; }
+        else if (grupoCta === '41') { entry.porClase.cred41 += credito; entry.porClase.deb41 += debito; }
+        else if (grupoCta === '22') { entry.porClase.cred22 += credito; entry.porClase.deb22 += debito; }
+        else if (['51', '52', '53', '61', '62', '71', '72', '14', '15'].includes(grupoCta)) {
+            entry.porClase.debGasto += debito;
+        }
         entry.movimientos.push({
             id: comprobante,
             fecha: formatearFecha(fecha),
@@ -272,27 +284,34 @@ export const generarConciliacion = (mapaDIAN: Map<string, any>, mapaContable: Ma
 
         if (contableData) {
             movimientosContables = contableData.movimientos;
+            const pc = contableData.porClase || {};
 
+            // Con un auxiliar completo (todas las cuentas), los débitos y
+            // créditos del mismo NIT se cancelan entre sí (partida doble).
+            // El cruce fiable es por clase de cuenta; se elige el candidato
+            // más cercano al total DIAN.
+            let candidatos: number[] = [];
             if (tipo === TIPO_CLASIFICACION.VENTA) {
-                const neto = contableData.totalCredito - contableData.totalDebito;
-                totalContableComparativo = Math.abs(neto);
-                if (Math.abs(contableData.neto - total) < Math.abs(totalContableComparativo - total)) {
-                    totalContableComparativo = Math.abs(contableData.neto);
-                }
-
+                candidatos = [
+                    pc.deb13 || 0,                       // facturación a clientes (13xx débitos, con IVA)
+                    pc.cred41 || 0,                      // ingresos (41xx, sin IVA)
+                    (pc.cred41 || 0) - (pc.deb41 || 0),  // ingresos netos de devoluciones
+                    Math.abs(contableData.totalCredito - contableData.totalDebito),
+                    Math.abs(contableData.neto),
+                ];
             } else if (tipo === TIPO_CLASIFICACION.COMPRA) {
-                totalContableComparativo = contableData.totalCredito;
-                // eslint-disable-next-line @typescript-eslint/no-unused-vars
-                const diferenciaUsandoCreditos = Math.abs(contableData.totalCredito - total);
-                const diferenciaUsandoDebitos = Math.abs(contableData.totalDebito - total);
-                const diferenciaUsandoNeto = Math.abs(Math.abs(contableData.neto) - total);
-
-                if (diferenciaUsandoDebitos < diferenciaUsandoCreditos && diferenciaUsandoDebitos < diferenciaUsandoNeto) {
-                    totalContableComparativo = contableData.totalDebito;
-                }
-                else if (diferenciaUsandoNeto < diferenciaUsandoCreditos) {
-                    totalContableComparativo = Math.abs(contableData.neto);
-                }
+                candidatos = [
+                    pc.cred22 || 0,                      // causación a proveedores (22xx créditos, con IVA)
+                    pc.debGasto || 0,                    // costo/gasto/inventario registrado (sin IVA)
+                    contableData.totalCredito,
+                    contableData.totalDebito,
+                    Math.abs(contableData.neto),
+                ];
+            }
+            const validos = candidatos.filter(c => c > 0);
+            if (validos.length > 0) {
+                totalContableComparativo = validos.reduce((mejor, c) =>
+                    Math.abs(c - total) < Math.abs(mejor - total) ? c : mejor, validos[0]);
             }
         }
 
