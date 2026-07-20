@@ -415,6 +415,49 @@ export default function ConciliatorPage() {
                     </div>
                 )}
 
+                {/* Guía de estados y ayuda visual */}
+                {results.length > 0 && (
+                    <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5 mb-6">
+                        <div className="grid md:grid-cols-2 gap-6">
+                            <div>
+                                <h4 className="font-bold text-slate-900 mb-3">Guía de Estados</h4>
+                                <ul className="space-y-2 text-sm text-slate-600">
+                                    <li className="flex items-start gap-2">
+                                        <span className="mt-0.5 inline-flex items-center gap-1 text-green-600 font-bold text-xs bg-green-100 px-2 py-1 rounded-full flex-shrink-0"><CheckCircle size={12} /> OK</span>
+                                        <span>Diferencia inmaterial (hasta $100 pesos).</span>
+                                    </li>
+                                    <li className="flex items-start gap-2">
+                                        <span className="mt-0.5 inline-flex items-center gap-1 text-yellow-600 font-bold text-xs bg-yellow-100 px-2 py-1 rounded-full flex-shrink-0"><AlertTriangle size={12} /> REVISAR</span>
+                                        <span>Diferencia mayor a $100 pero menor al 10% del total. Requiere revisión.</span>
+                                    </li>
+                                    <li className="flex items-start gap-2">
+                                        <span className="mt-0.5 inline-flex items-center gap-1 text-red-600 font-bold text-xs bg-red-100 px-2 py-1 rounded-full flex-shrink-0"><AlertTriangle size={12} /> CRÍTICO</span>
+                                        <span>Diferencia del 10% o más del total reportado en DIAN.</span>
+                                    </li>
+                                    <li className="flex items-start gap-2">
+                                        <span className="mt-0.5 inline-flex items-center gap-1 text-orange-600 font-bold text-xs bg-orange-100 px-2 py-1 rounded-full flex-shrink-0"><AlertTriangle size={12} /> NO EN CONTAB.</span>
+                                        <span>El NIT existe en DIAN pero no tiene movimientos en el auxiliar contable.</span>
+                                    </li>
+                                </ul>
+                            </div>
+                            <div>
+                                <h4 className="font-bold text-slate-900 mb-3">Ayuda Visual (Detalle)</h4>
+                                <p className="text-sm text-slate-500 mb-2">Al abrir el detalle de un tercero:</p>
+                                <ul className="space-y-2 text-sm text-slate-600">
+                                    <li className="flex items-start gap-2">
+                                        <span className="mt-0.5 w-4 h-4 rounded bg-green-100 border border-green-300 flex-shrink-0"></span>
+                                        <span><span className="font-semibold text-slate-800">Verde:</span> el valor exacto existe en ambos lados (DIAN y contabilidad).</span>
+                                    </li>
+                                    <li className="flex items-start gap-2">
+                                        <span className="mt-0.5 w-4 h-4 rounded bg-yellow-100 border border-yellow-300 flex-shrink-0"></span>
+                                        <span><span className="font-semibold text-slate-800">Amarillo:</span> el valor no se encontró en la contraparte — identifica rápido qué factura falta o tiene valor diferente.</span>
+                                    </li>
+                                </ul>
+                            </div>
+                        </div>
+                    </div>
+                )}
+
                 {/* Results Section */}
                 {results.length > 0 && (
                     <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden mb-8">
