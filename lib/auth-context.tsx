@@ -80,8 +80,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
 
     const resetPassword = async (email: string) => {
+        // /restablecer es la página que permite definir la contraseña nueva;
+        // apuntar al login dejaba al usuario en un bucle sin poder cambiarla.
         const { error } = await supabase.auth.resetPasswordForEmail(email, {
-            redirectTo: typeof window !== 'undefined' ? `${window.location.origin}/login` : undefined,
+            redirectTo: typeof window !== 'undefined' ? `${window.location.origin}/restablecer` : undefined,
         })
         return { error }
     }
